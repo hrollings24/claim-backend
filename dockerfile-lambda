@@ -1,0 +1,12 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY ClaimBackend.Api/ClaimBackend.Api.csproj ClaimBackend.Api/
+RUN dotnet restore ClaimBackend.Api/ClaimBackend.Api.csproj
+
+COPY ClaimBackend.Api/ ClaimBackend.Api/
+RUN dotnet publish ClaimBackend.Api/ClaimBackend.Api.csproj -c Release -o /app/publish
+
+FROM public.ecr.aws/lambda/dotnet:10
+COPY --from=build /app/publish ${LAMBDA_TASK_ROOT}
+CMD ["ClaimBackend.Api"]
