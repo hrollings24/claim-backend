@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "claim-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../claim-frontend", "run", "start"],
+      "port": 8100
+    }
+  ]
+}

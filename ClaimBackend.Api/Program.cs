@@ -81,12 +81,18 @@ builder.Services.AddAuthorization();
 builder.Services.AddDbContext<ClaimBackendDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
 
+// A comma-separated string rather than a JSON array so production can override it with a
+// single Lambda environment variable (Cors__AllowedOrigins) instead of indexed array entries.
+var allowedOrigins = (builder.Configuration["Cors:AllowedOrigins"]
+    ?? throw new InvalidOperationException("Missing 'Cors:AllowedOrigins' configuration value."))
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
         policy
-            .WithOrigins("http://localhost:8100", "capacitor://localhost", "ionic://localhost")
+            .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
