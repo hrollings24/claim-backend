@@ -13,8 +13,10 @@ public class GamesOptions
     public string? ServiceUrl { get; set; }
 
     /// <summary>
-    /// Abandoned lobbies are cleaned up by DynamoDB's TTL rather than by us, so a game that
-    /// nobody ever leaves properly doesn't sit in the table forever.
+    /// How long a game survives without being written to. Abandoned lobbies are cleaned up by
+    /// DynamoDB's TTL rather than by us, so a game nobody ever leaves properly doesn't sit in
+    /// the table forever. The clock restarts on every write, not on reads — an in-progress game
+    /// that nobody touches still ages out.
     /// </summary>
     public int TimeToLiveHours { get; set; } = 24;
 

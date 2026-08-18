@@ -51,7 +51,8 @@ the VPC so it can reach Cognito's JWKS endpoint — DynamoDB is reachable over t
 and needs no NAT Gateway. Writes carry a `Version` attribute used as a condition on the next
 write, so two players joining at the same moment can't overwrite each other's change to the
 roster; a write that loses re-reads and reapplies. Abandoned lobbies are removed by DynamoDB's
-TTL on `ExpiresAt` rather than by the API.
+TTL on `ExpiresAt` rather than by the API. That expiry is measured from the most recent write,
+so an active game keeps pushing it out; note that polling the lobby is a read and does not.
 
 Note that the display name is sent by the client, because the API is called with the Cognito
 *access* token and the name lives on the *id* token. It is therefore self-asserted. Verifying it

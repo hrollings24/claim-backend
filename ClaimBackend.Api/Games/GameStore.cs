@@ -353,8 +353,12 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options)
         ["CreatedAt"] = new AttributeValue(game.CreatedAt.ToString("O", CultureInfo.InvariantCulture)),
         ["Version"] = Number(game.Version),
         ["DurationMinutes"] = Number(game.DurationMinutes),
+        // Measured from this write rather than from creation, so every action pushes the expiry
+        // out and only genuinely idle lobbies age away. Basing it on CreatedAt would delete a
+        // game mid-play once it had been running for the TTL — reachable now that a game can be
+        // set to last as long as a day.
         ["ExpiresAt"] = Number(
-            game.CreatedAt.AddHours(_options.TimeToLiveHours).ToUnixTimeSeconds()),
+            DateTimeOffset.UtcNow.AddHours(_options.TimeToLiveHours).ToUnixTimeSeconds()),
         ["Players"] = new AttributeValue
         {
             L = game.Players
