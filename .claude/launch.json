@@ -4,7 +4,15 @@
     {
       "name": "claim-frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "../claim-frontend", "run", "start"],
+      "runtimeArgs": [
+        "--prefix",
+        "../claim-frontend",
+        "run",
+        "start",
+        "--",
+        "--port",
+        "8100"
+      ],
       "port": 8100
     }
   ]
