@@ -1,8 +1,12 @@
+using Amazon.DynamoDBv2;
 using Amazon.Lambda.AspNetCoreServer.Hosting;
+using Amazon.Runtime;
 using ClaimBackend.Api.Auth;
 using ClaimBackend.Api.Data;
+using ClaimBackend.Api.Games;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Scalar.AspNetCore;
@@ -80,6 +84,26 @@ builder.Services.AddAuthorization();
 
 builder.Services.AddDbContext<ClaimBackendDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+
+builder.Services.Configure<GamesOptions>(builder.Configuration.GetSection(GamesOptions.SectionName));
+
+builder.Services.AddSingleton<IAmazonDynamoDB>(serviceProvider =>
+{
+    var gamesOptions = serviceProvider.GetRequiredService<IOptions<GamesOptions>>().Value;
+
+    if (string.IsNullOrWhiteSpace(gamesOptions.ServiceUrl))
+    {
+        // In AWS the region and credentials come from the Lambda execution environment.
+        return new AmazonDynamoDBClient();
+    }
+
+    // DynamoDB Local accepts any credentials, but the SDK still insists on being given some.
+    return new AmazonDynamoDBClient(
+        new BasicAWSCredentials("local", "local"),
+        new AmazonDynamoDBConfig { ServiceURL = gamesOptions.ServiceUrl });
+});
+
+builder.Services.AddSingleton<GameStore>();
 
 // A comma-separated string rather than a JSON array so production can override it with a
 // single Lambda environment variable (Cors__AllowedOrigins) instead of indexed array entries.

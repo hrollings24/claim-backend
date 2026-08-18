@@ -27,18 +27,55 @@ Pool id, region and app client id live in `appsettings.json` under `Cognito` —
 there if the Terraform-managed pool is ever recreated (the ids currently match the
 `eu-west-2_o9OmKT1Iy` pool / `6ub55cc2k3so0niq5m3lttn250` client from `claim-infrastructure`).
 
-## Database
+## Games
 
-`ConnectionStrings:Default` points at Postgres (matches the `claim-infrastructure` RDS
-instance's db name/username). Override locally via user-secrets or an environment variable
-rather than committing real credentials:
+Players create a game, share the six-character code it returns, and everyone else joins with
+that code. The lobby shows who is in, and the host starts it.
+
+| Method | Route                     | Notes                                              |
+| ------ | ------------------------- | -------------------------------------------------- |
+| POST   | `/api/games`              | Creates a game; the caller becomes host            |
+| GET    | `/api/games/{code}`       | Current roster and status — the lobby polls this   |
+| POST   | `/api/games/{code}/join`  | Joins; re-joining is a no-op, not an error         |
+| POST   | `/api/games/{code}/leave` | Leaves; hands off the host role, deletes if empty  |
+| POST   | `/api/games/{code}/start` | Host only; moves the game from `Lobby` to `InProgress` |
+
+All of them require a Cognito access token.
+
+Codes come from a 32-character alphabet with `I`, `O`, `0` and `1` left out, since they get read
+aloud and typed by hand.
+
+Each game is a single DynamoDB item keyed by its code (`Games:TableName`, provisioned in
+`claim-infrastructure/games.tf`). DynamoDB rather than Postgres because the Lambda sits outside
+the VPC so it can reach Cognito's JWKS endpoint — DynamoDB is reachable over the public AWS API
+and needs no NAT Gateway. Writes carry a `Version` attribute used as a condition on the next
+write, so two players joining at the same moment can't overwrite each other's change to the
+roster; a write that loses re-reads and reapplies. Abandoned lobbies are removed by DynamoDB's
+TTL on `ExpiresAt` rather than by the API.
+
+Note that the display name is sent by the client, because the API is called with the Cognito
+*access* token and the name lives on the *id* token. It is therefore self-asserted. Verifying it
+would mean calling Cognito's `GetUser` with the caller's access token.
+
+### Running DynamoDB locally
+
+`appsettings.Development.json` points `Games:ServiceUrl` at DynamoDB Local on port 8000. That
+setting is absent in AWS, where the SDK's default endpoint and the Lambda's execution role apply.
 
 ```
-dotnet user-secrets set "ConnectionStrings:Default" "Host=...;Port=5432;Database=...;Username=...;Password=..." --project ClaimBackend.Api
+docker run -d -p 8000:8000 --name dynamodb-local amazon/dynamodb-local
+
+aws dynamodb create-table \
+  --table-name claim-games \
+  --attribute-definitions AttributeName=Code,AttributeType=S \
+  --key-schema AttributeName=Code,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --endpoint-url http://localhost:8000 \
+  --region eu-west-2
 ```
 
-No entities/migrations exist yet — add them to `ClaimBackendDbContext` and run
-`dotnet ef migrations add <Name> --project ClaimBackend.Api` once the schema is known.
+DynamoDB Local ignores credentials but the AWS CLI still wants some, so any dummy values in the
+environment will do.
 
 ## Running locally
 

@@ -1,0 +1,26 @@
+namespace ClaimBackend.Api.Games;
+
+public class GamesOptions
+{
+    public const string SectionName = "Games";
+
+    public required string TableName { get; set; }
+
+    /// <summary>
+    /// Points the client at DynamoDB Local for development. Left unset in AWS, where the
+    /// default endpoint and the Lambda's execution role are what we want.
+    /// </summary>
+    public string? ServiceUrl { get; set; }
+
+    /// <summary>
+    /// Abandoned lobbies are cleaned up by DynamoDB's TTL rather than by us, so a game that
+    /// nobody ever leaves properly doesn't sit in the table forever.
+    /// </summary>
+    public int TimeToLiveHours { get; set; } = 24;
+
+    /// <summary>
+    /// A game is stored as a single DynamoDB item (400KB limit), so the roster can't grow
+    /// without bound.
+    /// </summary>
+    public int MaxPlayers { get; set; } = 12;
+}
