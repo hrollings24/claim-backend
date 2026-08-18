@@ -1,4 +1,4 @@
-using System.Security.Claims;
+using ClaimBackend.Api.Auth;
 using ClaimBackend.Api.Games;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,13 +10,11 @@ namespace ClaimBackend.Api.Controllers;
 [Authorize]
 public class GamesController(GameStore store) : ControllerBase
 {
-    private const int MaxDisplayNameLength = 40;
-
     [HttpPost]
     public async Task<ActionResult<GameDto>> Create(
         [FromBody] GameMembershipRequest? request, CancellationToken cancellationToken)
     {
-        var game = await store.CreateAsync(Sub, DisplayName(request), cancellationToken);
+        var game = await store.CreateAsync(Sub, CallerIdentity.DisplayNameOrDefault(request?.DisplayName), cancellationToken);
         return CreatedAtAction(nameof(Get), new { code = game.Code }, ToDto(game));
     }
 
@@ -32,7 +30,7 @@ public class GamesController(GameStore store) : ControllerBase
         string code, [FromBody] GameMembershipRequest? request, CancellationToken cancellationToken)
     {
         var result = await store.JoinAsync(
-            GameCodeGenerator.Normalize(code), Sub, DisplayName(request), cancellationToken);
+            GameCodeGenerator.Normalize(code), Sub, CallerIdentity.DisplayNameOrDefault(request?.DisplayName), cancellationToken);
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
@@ -63,23 +61,7 @@ public class GamesController(GameStore store) : ControllerBase
             : Failure(result.Status, code);
     }
 
-    /// <summary>
-    /// The Cognito subject of the caller. JwtBearer may or may not have renamed `sub` to the
-    /// ClaimTypes equivalent depending on inbound claim mapping, so both spellings are checked.
-    /// </summary>
-    private string Sub =>
-        User.FindFirstValue("sub")
-        ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-        ?? throw new InvalidOperationException("Authenticated caller has no subject claim.");
-
-    private static string DisplayName(GameMembershipRequest? request)
-    {
-        var name = request?.DisplayName?.Trim();
-
-        return string.IsNullOrEmpty(name)
-            ? "Player"
-            : name[..Math.Min(name.Length, MaxDisplayNameLength)];
-    }
+    private string Sub => User.GetSubject();
 
     private GameDto ToDto(Game game) => new(
         game.Code,

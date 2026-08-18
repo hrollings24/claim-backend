@@ -2,6 +2,7 @@ using Amazon.DynamoDBv2;
 using Amazon.Lambda.AspNetCoreServer.Hosting;
 using Amazon.Runtime;
 using ClaimBackend.Api.Auth;
+using ClaimBackend.Api.Challenges;
 using ClaimBackend.Api.Data;
 using ClaimBackend.Api.Games;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -104,6 +105,11 @@ builder.Services.AddSingleton<IAmazonDynamoDB>(serviceProvider =>
 });
 
 builder.Services.AddSingleton<GameStore>();
+
+builder.Services.Configure<ChallengesOptions>(
+    builder.Configuration.GetSection(ChallengesOptions.SectionName));
+
+builder.Services.AddSingleton<ChallengeStore>();
 
 // A comma-separated string rather than a JSON array so production can override it with a
 // single Lambda environment variable (Cors__AllowedOrigins) instead of indexed array entries.
