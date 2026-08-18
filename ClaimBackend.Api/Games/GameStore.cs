@@ -13,6 +13,9 @@ public enum GameMutationStatus
     NotHost,
     AlreadyStarted,
     GameFull,
+    TeamNotFound,
+    DuplicateTeamName,
+    TooManyTeams,
     Conflict,
 }
 
@@ -59,9 +62,11 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options)
                 Code = GameCodeGenerator.Next(),
                 HostSub = hostSub,
                 Status = GameStatus.Lobby,
+                DurationMinutes = _options.DefaultDurationMinutes,
                 CreatedAt = now,
                 Version = 1,
                 Players = [new GamePlayer { Sub = hostSub, Name = hostName, JoinedAt = now }],
+                Teams = [],
             };
 
             try
@@ -148,6 +153,112 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options)
             }
 
             game.Status = GameStatus.InProgress;
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>
+    /// The game's length is a setting rather than a player choice, so it follows the same rule
+    /// as starting: the host decides.
+    /// </summary>
+    public Task<GameMutationResult> SetDurationAsync(
+        string code, string sub, int durationMinutes, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            if (!game.IsHost(sub))
+            {
+                return GameMutationStatus.NotHost;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            game.DurationMinutes = durationMinutes;
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>
+    /// Creates a team and puts the caller in it: someone naming a team almost always wants to
+    /// be on it, and switching away afterwards is a single call.
+    /// </summary>
+    public Task<GameMutationResult> CreateTeamAsync(
+        string code, string sub, string name, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            var player = game.FindPlayer(sub);
+            if (player is null)
+            {
+                return GameMutationStatus.NotInGame;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            if (game.Teams.Count >= _options.MaxTeams)
+            {
+                return GameMutationStatus.TooManyTeams;
+            }
+
+            // Two teams with the same name are indistinguishable in the lobby.
+            if (game.HasTeamNamed(name))
+            {
+                return GameMutationStatus.DuplicateTeamName;
+            }
+
+            var team = new GameTeam { Id = Guid.NewGuid().ToString("n"), Name = name };
+            game.Teams.Add(team);
+            player.TeamId = team.Id;
+
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>
+    /// Picking a team and changing your mind are the same operation — the player's team is
+    /// simply set to the one they chose.
+    /// </summary>
+    public Task<GameMutationResult> JoinTeamAsync(
+        string code, string sub, string teamId, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            var player = game.FindPlayer(sub);
+            if (player is null)
+            {
+                return GameMutationStatus.NotInGame;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            if (game.FindTeam(teamId) is null)
+            {
+                return GameMutationStatus.TeamNotFound;
+            }
+
+            player.TeamId = teamId;
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    public Task<GameMutationResult> LeaveTeamAsync(
+        string code, string sub, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            var player = game.FindPlayer(sub);
+            if (player is null)
+            {
+                return GameMutationStatus.NotInGame;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            player.TeamId = null;
             return GameMutationStatus.Success;
         }, cancellationToken);
 
@@ -241,6 +352,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options)
         ["Status"] = new AttributeValue(game.Status.ToString()),
         ["CreatedAt"] = new AttributeValue(game.CreatedAt.ToString("O", CultureInfo.InvariantCulture)),
         ["Version"] = Number(game.Version),
+        ["DurationMinutes"] = Number(game.DurationMinutes),
         ["ExpiresAt"] = Number(
             game.CreatedAt.AddHours(_options.TimeToLiveHours).ToUnixTimeSeconds()),
         ["Players"] = new AttributeValue
@@ -254,6 +366,22 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options)
                         ["Name"] = new AttributeValue(player.Name),
                         ["JoinedAt"] = new AttributeValue(
                             player.JoinedAt.ToString("O", CultureInfo.InvariantCulture)),
+                        ["TeamId"] = player.TeamId is null
+                            ? new AttributeValue { NULL = true }
+                            : new AttributeValue(player.TeamId),
+                    },
+                })
+                .ToList(),
+        },
+        ["Teams"] = new AttributeValue
+        {
+            L = game.Teams
+                .Select(team => new AttributeValue
+                {
+                    M = new Dictionary<string, AttributeValue>
+                    {
+                        ["Id"] = new AttributeValue(team.Id),
+                        ["Name"] = new AttributeValue(team.Name),
                     },
                 })
                 .ToList(),
@@ -267,13 +395,28 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options)
         Status = Enum.Parse<GameStatus>(item["Status"].S),
         CreatedAt = DateTimeOffset.Parse(item["CreatedAt"].S, CultureInfo.InvariantCulture),
         Version = long.Parse(item["Version"].N, CultureInfo.InvariantCulture),
+        // Games created before the duration setting existed fall back to an hour.
+        DurationMinutes = item.TryGetValue("DurationMinutes", out var duration)
+            ? int.Parse(duration.N, CultureInfo.InvariantCulture)
+            : 60,
         Players = item["Players"].L
             .Select(player => new GamePlayer
             {
                 Sub = player.M["Sub"].S,
                 Name = player.M["Name"].S,
                 JoinedAt = DateTimeOffset.Parse(player.M["JoinedAt"].S, CultureInfo.InvariantCulture),
+                TeamId = OptionalString(player.M, "TeamId"),
             })
             .ToList(),
+        // Games created before teams existed have no Teams attribute at all.
+        Teams = item.TryGetValue("Teams", out var teams)
+            ? teams.L
+                .Select(team => new GameTeam { Id = team.M["Id"].S, Name = team.M["Name"].S })
+                .ToList()
+            : [],
     };
+
+    /// <summary>Reads an attribute that may be absent, or present and explicitly null.</summary>
+    private static string? OptionalString(Dictionary<string, AttributeValue> item, string name) =>
+        item.TryGetValue(name, out var value) ? value.S : null;
 }

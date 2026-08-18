@@ -23,4 +23,13 @@ public class GamesOptions
     /// without bound.
     /// </summary>
     public int MaxPlayers { get; set; } = 12;
+
+    /// <summary>
+    /// Teams are deliberately not scarce, but they share the game's single item, so there is a
+    /// ceiling. Raise it freely — the item limit is far above this.
+    /// </summary>
+    public int MaxTeams { get; set; } = 20;
+
+    /// <summary>Starting length for a new game, in minutes. The host can change it in the lobby.</summary>
+    public int DefaultDurationMinutes { get; set; } = 60;
 }
