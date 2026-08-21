@@ -104,6 +104,7 @@ builder.Services.AddSingleton<IAmazonDynamoDB>(serviceProvider =>
         new AmazonDynamoDBConfig { ServiceURL = gamesOptions.ServiceUrl });
 });
 
+builder.Services.AddSingleton<GameEngine>();
 builder.Services.AddSingleton<GameStore>();
 
 builder.Services.Configure<ChallengesOptions>(

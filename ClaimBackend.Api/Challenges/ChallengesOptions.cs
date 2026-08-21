@@ -9,4 +9,7 @@ public class ChallengesOptions
     public int DefaultPageSize { get; set; } = 25;
 
     public int MaxPageSize { get; set; } = 100;
+
+    /// <summary>Ceiling on how many challenges are pulled into memory to deal a game's hands.</summary>
+    public int MaxDeckSize { get; set; } = 500;
 }

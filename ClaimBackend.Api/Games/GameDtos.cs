@@ -16,6 +16,7 @@ public record GameDto(
     bool YouAreHost,
     string? YourTeamId,
     int DurationMinutes,
+    GameBoardDto? Board,
     IReadOnlyList<GamePlayerDto> Players,
     IReadOnlyList<GameTeamDto> Teams);
 
@@ -28,11 +29,43 @@ public record GameDto(
 public record GameMembershipRequest(string? DisplayName);
 
 public record CreateTeamRequest(
-    [property: Required, StringLength(40, MinimumLength = 1)] string Name);
+    [Required, StringLength(40, MinimumLength = 1)] string Name);
 
 /// <summary>
 /// A single total in minutes rather than separate hours and minutes fields — the lobby splits
 /// it for display, and one number can't express a contradictory pair.
 /// </summary>
 public record SetDurationRequest(
-    [property: Range(1, 24 * 60)] int DurationMinutes);
+    [Range(1, 24 * 60)] int DurationMinutes);
+
+public record ActiveBoroughDto(string Id, string Name, string Zone, bool IsHot);
+
+public record TerritoryDto(
+    string Id, string Name, string TeamId, string TeamName, bool IsLocked, DateTimeOffset? LockedUntil);
+
+public record HandCardDto(
+    string Id, string Type, string Title, string Summary, string FurtherDetails);
+
+public record TeamScoreDto(string TeamId, string Name, int Territories, int BonusPoints, int Score);
+
+/// <summary>Only ever the caller's own window — you can't see who else is about to hit back.</summary>
+public record CounterWindowDto(string AgainstTeamId, string AgainstTeamName, DateTimeOffset ExpiresAt);
+
+/// <summary>
+/// Everything a player needs to decide their next move: what's on offer, who holds what, the
+/// cards in their own hand, and the clock.
+/// </summary>
+public record GameBoardDto(
+    IReadOnlyList<ActiveBoroughDto> Active,
+    string? HotBoroughId,
+    DateTimeOffset HotRotatesAt,
+    IReadOnlyList<TerritoryDto> Territories,
+    IReadOnlyList<HandCardDto> YourHand,
+    IReadOnlyList<TeamScoreDto> Scores,
+    CounterWindowDto? YourCounterWindow,
+    DateTimeOffset? EndsAt);
+
+public record PlayCardRequest(
+    [Required] string CardId,
+    [Required] string BoroughId,
+    bool Succeeded);

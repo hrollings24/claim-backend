@@ -1,8 +1,20 @@
 namespace ClaimBackend.Api.Challenges;
 
+/// <summary>
+/// Which half of the deck a challenge belongs to. CLAIM cards are played on unclaimed
+/// boroughs, STEAL cards on boroughs another team already holds.
+/// </summary>
+public enum ChallengeType
+{
+    Claim,
+    Steal,
+}
+
 public class Challenge
 {
     public required string Id { get; init; }
+    public required ChallengeType Type { get; init; }
+
     public required string Title { get; init; }
     public required string Summary { get; init; }
     public required string FurtherDetails { get; init; }

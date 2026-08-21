@@ -42,6 +42,7 @@ public class ChallengesController(ChallengeStore store) : ControllerBase
             new Challenge
             {
                 Id = Guid.NewGuid().ToString("n"),
+                Type = request.Type,
                 Title = request.Title.Trim(),
                 Summary = request.Summary.Trim(),
                 FurtherDetails = request.FurtherDetails.Trim(),
@@ -56,6 +57,7 @@ public class ChallengesController(ChallengeStore store) : ControllerBase
 
     private static ChallengeDto ToDto(Challenge challenge) => new(
         challenge.Id,
+        challenge.Type.ToString(),
         challenge.Title,
         challenge.Summary,
         challenge.FurtherDetails,

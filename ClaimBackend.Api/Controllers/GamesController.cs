@@ -1,4 +1,6 @@
 using ClaimBackend.Api.Auth;
+using ClaimBackend.Api.Boroughs;
+using ClaimBackend.Api.Challenges;
 using ClaimBackend.Api.Games;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -8,7 +10,7 @@ namespace ClaimBackend.Api.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
-public class GamesController(GameStore store) : ControllerBase
+public class GamesController(GameStore store, ChallengeStore challenges) : ControllerBase
 {
     [HttpPost]
     public async Task<ActionResult<GameDto>> Create(
@@ -31,6 +33,31 @@ public class GamesController(GameStore store) : ControllerBase
     {
         var result = await store.JoinAsync(
             GameCodeGenerator.Normalize(code), Sub, CallerIdentity.DisplayNameOrDefault(request?.DisplayName), cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
+    /// <summary>
+    /// Plays a card at a borough and reports whether the challenge came off. Which of claim,
+    /// steal or counter-attack that amounts to is the engine's decision, from the card's kind
+    /// and who holds the borough.
+    /// </summary>
+    [HttpPost("{code}/play")]
+    public async Task<ActionResult<GameDto>> Play(
+        string code, [FromBody] PlayCardRequest request, CancellationToken cancellationToken)
+    {
+        var deck = await challenges.GetDeckAsync(cancellationToken);
+
+        var (result, _) = await store.PlayAsync(
+            GameCodeGenerator.Normalize(code),
+            Sub,
+            request.CardId,
+            request.BoroughId,
+            request.Succeeded,
+            deck,
+            cancellationToken);
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
@@ -99,10 +126,15 @@ public class GamesController(GameStore store) : ControllerBase
             : Failure(result.Status, code);
     }
 
+    /// <summary>
+    /// Deals the board and the hands. Cards come from the challenges everyone has written, so a
+    /// game can't start until there are enough of them, with at least one of each kind.
+    /// </summary>
     [HttpPost("{code}/start")]
     public async Task<ActionResult<GameDto>> Start(string code, CancellationToken cancellationToken)
     {
-        var result = await store.StartAsync(GameCodeGenerator.Normalize(code), Sub, cancellationToken);
+        var deck = await challenges.GetDeckAsync(cancellationToken);
+        var result = await store.StartAsync(GameCodeGenerator.Normalize(code), Sub, deck, cancellationToken);
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
@@ -117,6 +149,7 @@ public class GamesController(GameStore store) : ControllerBase
         game.IsHost(Sub),
         game.FindPlayer(Sub)?.TeamId,
         game.DurationMinutes,
+        BoardToDto(game),
         game.Players
             .Select(player => new GamePlayerDto(
                 player.Name,
@@ -125,6 +158,61 @@ public class GamesController(GameStore store) : ControllerBase
                 player.TeamId))
             .ToList(),
         game.Teams.Select(team => new GameTeamDto(team.Id, team.Name)).ToList());
+
+    /// <summary>Null in the lobby; the board only exists once the game has been dealt.</summary>
+    private GameBoardDto? BoardToDto(Game game)
+    {
+        if (game.Board is not { } board)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var yourTeamId = game.FindPlayer(Sub)?.TeamId;
+
+        var territories = game.Teams
+            .SelectMany(team => team.Territories.Select(territory => new TerritoryDto(
+                territory.BoroughId,
+                BoroughCatalogue.NameOf(territory.BoroughId),
+                team.Id,
+                team.Name,
+                territory.IsLocked(now),
+                territory.LockedUntil)))
+            .OrderBy(t => t.Name)
+            .ToList();
+
+        var counter = game.CounterWindows.FirstOrDefault(w => w.TeamId == yourTeamId);
+
+        return new GameBoardDto(
+            board.Active
+                .Select(a => new ActiveBoroughDto(
+                    a.BoroughId,
+                    BoroughCatalogue.NameOf(a.BoroughId),
+                    BoroughCatalogue.Find(a.BoroughId)?.Zone.ToString() ?? "Outer",
+                    a.BoroughId == board.HotBoroughId))
+                .ToList(),
+            board.HotBoroughId,
+            board.HotRotatesAt,
+            territories,
+            yourTeamId is null
+                ? []
+                : game.FindHand(yourTeamId)?.Cards
+                    .Select(c => new HandCardDto(
+                        c.Id, c.Type.ToString(), c.Title, c.Summary, c.FurtherDetails))
+                    .ToList() ?? [],
+            game.Teams
+                .Select(team => new TeamScoreDto(
+                    team.Id, team.Name, team.Territories.Count, team.BonusPoints, game.ScoreFor(team)))
+                .OrderByDescending(t => t.Score)
+                .ToList(),
+            counter is null
+                ? null
+                : new CounterWindowDto(
+                    counter.AgainstTeamId,
+                    game.Teams.FirstOrDefault(t => t.Id == counter.AgainstTeamId)?.Name ?? "another team",
+                    counter.ExpiresAt),
+            game.EndsAt);
+    }
 
     private ActionResult GameNotFound(string code) =>
         NotFound(new ProblemDetails
@@ -160,6 +248,38 @@ public class GamesController(GameStore store) : ControllerBase
 
         GameMutationStatus.DuplicateTeamName => Problem(
             title: "A team with that name already exists",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotEnoughTeams => Problem(
+            title: "A game needs at least two teams",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotEnoughChallenges => Problem(
+            title: "Not enough challenges to deal from — you need at least five, including at least one claim and one steal",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotOnATeam => Problem(
+            title: "Join a team before playing",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.CardNotInHand => Problem(
+            title: "That card isn't in your team's hand",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.InvalidTarget => Problem(
+            title: "That card can't be played on that borough",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.BoroughLocked => Problem(
+            title: "That borough is locked and can't be contested yet",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.GameNotRunning => Problem(
+            title: "This game isn't running",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NoCounterWindow => Problem(
+            title: "You have no counter-attack open against that team",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.TooManyTeams => Problem(

@@ -8,6 +8,7 @@ namespace ClaimBackend.Api.Challenges;
 /// </summary>
 public record ChallengeDto(
     string Id,
+    string Type,
     string Title,
     string Summary,
     string FurtherDetails,
@@ -17,7 +18,8 @@ public record ChallengeDto(
 public record ChallengePageDto(IReadOnlyList<ChallengeDto> Challenges, string? NextCursor);
 
 public record CreateChallengeRequest(
-    [property: Required, StringLength(120, MinimumLength = 1)] string Title,
-    [property: Required, StringLength(300, MinimumLength = 1)] string Summary,
-    [property: Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails,
+    [Required] ChallengeType Type,
+    [Required, StringLength(120, MinimumLength = 1)] string Title,
+    [Required, StringLength(300, MinimumLength = 1)] string Summary,
+    [Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails,
     string? DisplayName);

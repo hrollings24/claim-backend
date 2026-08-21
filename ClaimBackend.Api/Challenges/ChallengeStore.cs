@@ -46,6 +46,27 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
             EncodeCursor(response.LastEvaluatedKey));
     }
 
+    /// <summary>
+    /// Every challenge, for dealing hands at the start of a game. Reads the whole partition
+    /// rather than paging, because a deck has to be shuffled as a whole — bounded by
+    /// <see cref="ChallengesOptions.MaxDeckSize"/> so a runaway table can't be pulled into memory.
+    /// </summary>
+    public async Task<IReadOnlyList<Challenge>> GetDeckAsync(CancellationToken cancellationToken)
+    {
+        var deck = new List<Challenge>();
+        string? cursor = null;
+
+        do
+        {
+            var page = await ListAsync(_options.MaxPageSize, cursor, cancellationToken);
+            deck.AddRange(page.Challenges);
+            cursor = page.NextCursor;
+        }
+        while (cursor is not null && deck.Count < _options.MaxDeckSize);
+
+        return deck;
+    }
+
     public async Task<Challenge> CreateAsync(Challenge challenge, CancellationToken cancellationToken)
     {
         await dynamo.PutItemAsync(
@@ -93,6 +114,7 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         [PartitionAttribute] = new AttributeValue(Partition),
         [SortAttribute] = new AttributeValue(challenge.SortKey),
         ["Id"] = new AttributeValue(challenge.Id),
+        ["Type"] = new AttributeValue(challenge.Type.ToString()),
         ["Title"] = new AttributeValue(challenge.Title),
         ["Summary"] = new AttributeValue(challenge.Summary),
         ["FurtherDetails"] = new AttributeValue(challenge.FurtherDetails),
@@ -104,6 +126,10 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
     private static Challenge FromItem(Dictionary<string, AttributeValue> item) => new()
     {
         Id = item["Id"].S,
+        // Challenges written before the deck existed are claim cards.
+        Type = item.TryGetValue("Type", out var type) && type.S is not null
+            ? Enum.Parse<ChallengeType>(type.S)
+            : ChallengeType.Claim,
         Title = item["Title"].S,
         Summary = item["Summary"].S,
         FurtherDetails = item["FurtherDetails"].S,

@@ -58,25 +58,41 @@ Note that the display name is sent by the client, because the API is called with
 *access* token and the name lives on the *id* token. It is therefore self-asserted. Verifying it
 would mean calling Cognito's `GetUser` with the caller's access token.
 
-### Running DynamoDB locally
+### Where DynamoDB lives when running locally
 
-`appsettings.Development.json` points `Games:ServiceUrl` at DynamoDB Local on port 8000. That
-setting is absent in AWS, where the SDK's default endpoint and the Lambda's execution role apply.
+By default the API talks to the **real** tables in AWS, using whatever credentials the AWS SDK
+resolves. That means a game or challenge created while developing is the same one the deployed
+app serves, so treat the data as shared rather than scratch.
+
+Credentials come from the usual SDK chain, so pick the profile that can reach the account:
+
+```
+export AWS_PROFILE=claim-infra
+dotnet run --project ClaimBackend.Api --launch-profile http
+```
+
+Without a working profile the SDK falls back to `default`, and calls fail with
+`InvalidClientTokenId` rather than anything that names the real problem.
+
+To work against a throwaway local database instead, set `Games:ServiceUrl` in
+`appsettings.Development.json` and point it at DynamoDB Local. That setting configures the
+shared DynamoDB client, so it governs challenges as well as games despite living under `Games`.
 
 ```
 docker run -d -p 8000:8000 --name dynamodb-local amazon/dynamodb-local
 
-aws dynamodb create-table \
-  --table-name claim-games \
+aws dynamodb create-table --table-name claim-games \
   --attribute-definitions AttributeName=Code,AttributeType=S \
   --key-schema AttributeName=Code,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --endpoint-url http://localhost:8000 \
-  --region eu-west-2
+  --billing-mode PAY_PER_REQUEST --endpoint-url http://localhost:8000 --region eu-west-2
+
+aws dynamodb create-table --table-name claim-challenges \
+  --attribute-definitions AttributeName=Kind,AttributeType=S AttributeName=CreatedAtId,AttributeType=S \
+  --key-schema AttributeName=Kind,KeyType=HASH AttributeName=CreatedAtId,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST --endpoint-url http://localhost:8000 --region eu-west-2
 ```
 
-DynamoDB Local ignores credentials but the AWS CLI still wants some, so any dummy values in the
-environment will do.
+DynamoDB Local keeps everything in memory, so stopping the container discards the data.
 
 ## Running locally
 
