@@ -193,7 +193,9 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 return GameMutationStatus.NotHost;
             }
 
-            if (game.Status is not GameStatus.Lobby)
+            // A game is only really started once it has a board. Anything flagged in progress
+            // without one was never dealt, and can still be started.
+            if (game.Status is not GameStatus.Lobby && game.Board is not null)
             {
                 return GameMutationStatus.AlreadyStarted;
             }
