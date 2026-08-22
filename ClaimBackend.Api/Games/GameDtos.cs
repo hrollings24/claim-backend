@@ -40,8 +40,9 @@ public record SetDurationRequest(
 
 public record ActiveBoroughDto(string Id, string Name, string Zone, bool IsHot);
 
+/// <summary>A locked borough is settled for the rest of the game, so there is no time to show.</summary>
 public record TerritoryDto(
-    string Id, string Name, string TeamId, string TeamName, bool IsLocked, DateTimeOffset? LockedUntil);
+    string Id, string Name, string TeamId, string TeamName, bool IsLocked);
 
 public record HandCardDto(
     string Id, string Type, string Title, string Summary, string FurtherDetails);

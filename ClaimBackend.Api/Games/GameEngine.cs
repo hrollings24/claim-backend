@@ -53,8 +53,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             Active = active.Select(id => new ActiveBorough { BoroughId = id }).ToList(),
             Remaining = pool.Skip(_options.ActiveBoroughCount).ToList(),
             HotBoroughId = active[Random.Shared.Next(active.Count)],
-            HotRotatesAt = now.AddMinutes(
-                Between(_options.HotRotationMinutesMin, _options.HotRotationMinutesMax)),
+            HotRotatesAt = now.AddMinutes(_options.HotRotationMinutes),
         };
 
         game.Hands.Clear();
@@ -103,18 +102,9 @@ public class GameEngine(IOptions<GamesOptions> options)
             return true;
         }
 
-        var changed = false;
-
-        foreach (var territory in game.Teams.SelectMany(t => t.Territories))
-        {
-            if (territory.LockedUntil is not null && !territory.IsLocked(now))
-            {
-                territory.LockedUntil = null;
-                changed = true;
-            }
-        }
-
-        changed |= game.CounterWindows.RemoveAll(window => window.ExpiresAt <= now) > 0;
+        // Locks are permanent, so the only deadlines left to bring forward are the counter
+        // window and the hot borough.
+        var changed = game.CounterWindows.RemoveAll(window => window.ExpiresAt <= now) > 0;
 
         // The hot borough must always be one of the active — unclaimed by definition — so it also
         // moves the moment the borough it was sitting on is claimed out from under it.
@@ -198,8 +188,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         if (wasHot)
         {
             team.BonusPoints++;
-            territory.LockedUntil = now.AddMinutes(
-                Between(_options.LockMinutesMin, _options.LockMinutesMax));
+            territory.Locked = true;
         }
 
         team.Territories.Add(territory);
@@ -226,28 +215,27 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         var territory = holder.FindTerritory(boroughId)!;
-        if (territory.IsLocked(now))
+        if (territory.IsLocked)
         {
             return new PlayResult(GameMutationStatus.BoroughLocked);
         }
 
         if (!succeeded)
         {
-            // The defender gets a short window to take one of the attacker's boroughs instead.
+            // The defender gets a window to take one of the attacker's boroughs instead. They
+            // choose which, and need not travel for it.
             game.CounterWindows.Add(new CounterWindow
             {
                 TeamId = holder.Id,
                 AgainstTeamId = team.Id,
-                ExpiresAt = now.AddMinutes(
-                    Between(_options.CounterWindowMinutesMin, _options.CounterWindowMinutesMax)),
+                ExpiresAt = now.AddMinutes(_options.CounterWindowMinutes),
             });
 
             return new PlayResult(GameMutationStatus.Success, PlayEffect.StealFailed);
         }
 
         holder.Territories.Remove(territory);
-        territory.LockedUntil = now.AddMinutes(
-            Between(_options.LockMinutesMin, _options.LockMinutesMax));
+        territory.Locked = true;
         team.Territories.Add(territory);
 
         return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughStolen);
@@ -271,7 +259,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         var territory = holder.FindTerritory(boroughId)!;
-        if (territory.IsLocked(now))
+        if (territory.IsLocked)
         {
             return new PlayResult(GameMutationStatus.BoroughLocked);
         }
@@ -314,8 +302,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             ? board.Active[Random.Shared.Next(board.Active.Count)].BoroughId
             : null;
 
-        board.HotRotatesAt = now.AddMinutes(
-            Between(_options.HotRotationMinutesMin, _options.HotRotationMinutesMax));
+        board.HotRotatesAt = now.AddMinutes(_options.HotRotationMinutes);
     }
 
     /// <summary>
@@ -341,5 +328,4 @@ public class GameEngine(IOptions<GamesOptions> options)
         FurtherDetails = challenge.FurtherDetails,
     };
 
-    private static int Between(int min, int max) => Random.Shared.Next(min, max + 1);
 }

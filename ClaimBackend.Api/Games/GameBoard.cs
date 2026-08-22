@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaimBackend.Api.Challenges;
 
 namespace ClaimBackend.Api.Games;
@@ -13,17 +14,24 @@ public class ActiveBorough
 }
 
 /// <summary>
-/// A borough a team holds. Locked territories are protected from being stolen until the timer
-/// runs out, after which they are held exactly as before.
+/// A borough a team holds. A locked one is out of contention for the rest of the game — taking
+/// it by stealing, or claiming it while hot, settles it permanently.
 /// </summary>
 public class Territory
 {
     public required string BoroughId { get; init; }
 
-    /// <summary>Null once the borough is contestable again.</summary>
+    public bool Locked { get; set; }
+
+    /// <summary>
+    /// Locks used to lapse after a timer. Kept only so games dealt before that changed still
+    /// read back with their locked boroughs locked.
+    /// </summary>
     public DateTimeOffset? LockedUntil { get; set; }
 
-    public bool IsLocked(DateTimeOffset now) => LockedUntil is { } until && until > now;
+    /// <summary>Derived, so it isn't stored — it would be a second copy of the same fact.</summary>
+    [JsonIgnore]
+    public bool IsLocked => Locked || LockedUntil is not null;
 }
 
 /// <summary>One card in a team's hand, copied from the challenge it was dealt from.</summary>

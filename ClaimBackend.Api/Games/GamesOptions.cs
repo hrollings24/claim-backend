@@ -40,18 +40,9 @@ public class GamesOptions
 
     public int HandSize { get; set; } = 5;
 
-    /// <summary>How long the hot borough stands before moving, picked from this range.</summary>
-    public int HotRotationMinutesMin { get; set; } = 60;
-
-    public int HotRotationMinutesMax { get; set; } = 90;
-
-    /// <summary>How long a borough is protected after a hot claim or a successful steal.</summary>
-    public int LockMinutesMin { get; set; } = 60;
-
-    public int LockMinutesMax { get; set; } = 90;
+    /// <summary>How long the hot borough stands before moving. It also moves the moment it is claimed.</summary>
+    public int HotRotationMinutes { get; set; } = 90;
 
     /// <summary>How long a team has to hit back after surviving a failed steal.</summary>
-    public int CounterWindowMinutesMin { get; set; } = 10;
-
-    public int CounterWindowMinutesMax { get; set; } = 15;
+    public int CounterWindowMinutes { get; set; } = 15;
 }

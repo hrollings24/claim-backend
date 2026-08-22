@@ -176,8 +176,7 @@ public class GamesController(GameStore store, ChallengeStore challenges) : Contr
                 BoroughCatalogue.NameOf(territory.BoroughId),
                 team.Id,
                 team.Name,
-                territory.IsLocked(now),
-                territory.LockedUntil)))
+                territory.IsLocked)))
             .OrderBy(t => t.Name)
             .ToList();
 
