@@ -63,7 +63,15 @@ public class GameEngine(IOptions<GamesOptions> options)
             game.Hands.Add(new TeamHand
             {
                 TeamId = team.Id,
-                Cards = Enumerable.Range(0, _options.HandSize).Select(_ => Draw(deck)).ToList(),
+                // Shuffle and take, rather than drawing each card independently: independent
+                // draws repeat, and with a small deck a five card hand was coming up with two
+                // pairs. Two teams can still share a challenge — with fewer cards than the
+                // table needs, they have to.
+                Cards = deck
+                    .OrderBy(_ => Random.Shared.Next())
+                    .Take(_options.HandSize)
+                    .Select(ToHandCard)
+                    .ToList(),
             });
         }
 
@@ -156,8 +164,11 @@ public class GameEngine(IOptions<GamesOptions> options)
         // A card is spent whether or not the challenge came off, and the hand is topped back up.
         if (result.Status is GameMutationStatus.Success)
         {
+            // Chosen before the played card leaves the hand, so the challenge just attempted
+            // isn't handed straight back.
+            var replacement = DrawReplacement(deck, hand);
             hand.Cards.Remove(card);
-            hand.Cards.Add(Draw(deck));
+            hand.Cards.Add(replacement);
         }
 
         return result;
@@ -307,20 +318,28 @@ public class GameEngine(IOptions<GamesOptions> options)
             Between(_options.HotRotationMinutesMin, _options.HotRotationMinutesMax));
     }
 
-    private static HandCard Draw(IReadOnlyList<Challenge> deck)
+    /// <summary>
+    /// Draws a card the team isn't already holding. If they hold the whole deck — possible when
+    /// there are barely more challenges than a hand needs — a repeat is unavoidable.
+    /// </summary>
+    private static HandCard DrawReplacement(IReadOnlyList<Challenge> deck, TeamHand hand)
     {
-        var challenge = deck[Random.Shared.Next(deck.Count)];
+        var held = hand.Cards.Select(c => c.ChallengeId).ToHashSet();
+        var unheld = deck.Where(challenge => !held.Contains(challenge.Id)).ToList();
+        var pool = unheld.Count > 0 ? unheld : deck;
 
-        return new HandCard
-        {
-            Id = Guid.NewGuid().ToString("n"),
-            ChallengeId = challenge.Id,
-            Type = challenge.Type,
-            Title = challenge.Title,
-            Summary = challenge.Summary,
-            FurtherDetails = challenge.FurtherDetails,
-        };
+        return ToHandCard(pool[Random.Shared.Next(pool.Count)]);
     }
+
+    private static HandCard ToHandCard(Challenge challenge) => new()
+    {
+        Id = Guid.NewGuid().ToString("n"),
+        ChallengeId = challenge.Id,
+        Type = challenge.Type,
+        Title = challenge.Title,
+        Summary = challenge.Summary,
+        FurtherDetails = challenge.FurtherDetails,
+    };
 
     private static int Between(int min, int max) => Random.Shared.Next(min, max + 1);
 }

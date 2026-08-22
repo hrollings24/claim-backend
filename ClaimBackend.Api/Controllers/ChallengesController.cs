@@ -11,27 +11,21 @@ namespace ClaimBackend.Api.Controllers;
 public class ChallengesController(ChallengeStore store) : ControllerBase
 {
     /// <summary>
-    /// Newest first. The list pages rather than returning everything, so it stays a bounded
-    /// response however many challenges accumulate; pass the previous response's cursor to
-    /// continue.
+    /// The whole deck, in alphabetical order. It is returned in one response rather than paged:
+    /// the table is keyed by creation time, so alphabetical order can't come from the key, and
+    /// paging a differently-ordered list would put an A on a later page than a Z. A deck is a
+    /// bounded set of hand-written cards — the engine already reads all of it to deal — and
+    /// ChallengesOptions.MaxDeckSize is the ceiling.
     /// </summary>
     [HttpGet]
-    public async Task<ActionResult<ChallengePageDto>> List(
-        [FromQuery] int? pageSize, [FromQuery] string? cursor, CancellationToken cancellationToken)
+    public async Task<ActionResult<IReadOnlyList<ChallengeDto>>> List(CancellationToken cancellationToken)
     {
-        ChallengePage page;
-        try
-        {
-            page = await store.ListAsync(pageSize, cursor, cancellationToken);
-        }
-        catch (ArgumentException)
-        {
-            return Problem(
-                title: "The paging cursor is not valid.",
-                statusCode: StatusCodes.Status400BadRequest);
-        }
+        var deck = await store.GetDeckAsync(cancellationToken);
 
-        return new ChallengePageDto(page.Challenges.Select(ToDto).ToList(), page.NextCursor);
+        return deck
+            .OrderBy(challenge => challenge.Title, StringComparer.CurrentCultureIgnoreCase)
+            .Select(ToDto)
+            .ToList();
     }
 
     [HttpPost]

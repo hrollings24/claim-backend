@@ -17,8 +17,6 @@ public record ChallengeDto(
     /// <summary>Whether the caller wrote it, and may therefore change or remove it.</summary>
     bool IsYours);
 
-public record ChallengePageDto(IReadOnlyList<ChallengeDto> Challenges, string? NextCursor);
-
 public record CreateChallengeRequest(
     [Required] ChallengeType Type,
     [Required, StringLength(120, MinimumLength = 1)] string Title,
