@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using System.Text.Json.Serialization;
 using Microsoft.OpenApi;
 using Scalar.AspNetCore;
 
@@ -23,7 +24,12 @@ var cognitoOptions = builder.Configuration.GetSection(CognitoOptions.SectionName
     ?? throw new InvalidOperationException($"Missing '{CognitoOptions.SectionName}' configuration section.");
 builder.Services.Configure<CognitoOptions>(builder.Configuration.GetSection(CognitoOptions.SectionName));
 
-builder.Services.AddControllers();
+// Enums travel as their names, not their numbers: the API already hands them out that way
+// (Lobby, Claim, Inner), and without this they would only bind back from integers.
+builder.Services
+    .AddControllers()
+    .AddJsonOptions(options =>
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 builder.Services.AddOpenApi(options =>
 {
