@@ -6,6 +6,13 @@ using Microsoft.Extensions.Options;
 
 namespace ClaimBackend.Api.Challenges;
 
+public enum ChallengeMutationStatus
+{
+    Success,
+    NotFound,
+    NotYours,
+}
+
 public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> options)
 {
     /// <summary>
@@ -65,6 +72,94 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         while (cursor is not null && deck.Count < _options.MaxDeckSize);
 
         return deck;
+    }
+
+    /// <summary>
+    /// Finds one challenge by id. The table is keyed by creation time so the list comes back in
+    /// order, which means an id on its own can't address an item — the partition is read and
+    /// filtered instead. Fine for a deck; it would not be for a large table.
+    /// </summary>
+    public async Task<Challenge?> FindAsync(string id, CancellationToken cancellationToken)
+    {
+        var deck = await GetDeckAsync(cancellationToken);
+
+        return deck.FirstOrDefault(challenge => challenge.Id == id);
+    }
+
+    /// <summary>
+    /// Rewrites a challenge in place. Id and creation time are carried over untouched: together
+    /// they are the item's key, so changing either would leave the original behind alongside a
+    /// copy. Authorship is carried over too — editing your wording doesn't make it someone
+    /// else's challenge.
+    /// </summary>
+    public async Task<ChallengeMutationStatus> UpdateAsync(
+        string id,
+        string sub,
+        ChallengeType type,
+        string title,
+        string summary,
+        string furtherDetails,
+        CancellationToken cancellationToken)
+    {
+        var existing = await FindAsync(id, cancellationToken);
+        if (existing is null)
+        {
+            return ChallengeMutationStatus.NotFound;
+        }
+
+        if (existing.CreatedBySub != sub)
+        {
+            return ChallengeMutationStatus.NotYours;
+        }
+
+        await dynamo.PutItemAsync(
+            new PutItemRequest
+            {
+                TableName = _options.TableName,
+                Item = ToItem(new Challenge
+                {
+                    Id = existing.Id,
+                    Type = type,
+                    Title = title,
+                    Summary = summary,
+                    FurtherDetails = furtherDetails,
+                    CreatedBySub = existing.CreatedBySub,
+                    CreatedByName = existing.CreatedByName,
+                    CreatedAt = existing.CreatedAt,
+                }),
+            },
+            cancellationToken);
+
+        return ChallengeMutationStatus.Success;
+    }
+
+    public async Task<ChallengeMutationStatus> DeleteAsync(
+        string id, string sub, CancellationToken cancellationToken)
+    {
+        var existing = await FindAsync(id, cancellationToken);
+        if (existing is null)
+        {
+            return ChallengeMutationStatus.NotFound;
+        }
+
+        if (existing.CreatedBySub != sub)
+        {
+            return ChallengeMutationStatus.NotYours;
+        }
+
+        await dynamo.DeleteItemAsync(
+            new DeleteItemRequest
+            {
+                TableName = _options.TableName,
+                Key = new Dictionary<string, AttributeValue>
+                {
+                    [PartitionAttribute] = new AttributeValue(Partition),
+                    [SortAttribute] = new AttributeValue(existing.SortKey),
+                },
+            },
+            cancellationToken);
+
+        return ChallengeMutationStatus.Success;
     }
 
     public async Task<Challenge> CreateAsync(Challenge challenge, CancellationToken cancellationToken)

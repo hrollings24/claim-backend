@@ -13,7 +13,9 @@ public record ChallengeDto(
     string Summary,
     string FurtherDetails,
     string CreatedByName,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    /// <summary>Whether the caller wrote it, and may therefore change or remove it.</summary>
+    bool IsYours);
 
 public record ChallengePageDto(IReadOnlyList<ChallengeDto> Challenges, string? NextCursor);
 
@@ -23,3 +25,13 @@ public record CreateChallengeRequest(
     [Required, StringLength(300, MinimumLength = 1)] string Summary,
     [Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails,
     string? DisplayName);
+
+/// <summary>
+/// Authorship isn't part of an edit — who wrote a challenge doesn't change because they fixed
+/// a typo — so it carries no display name.
+/// </summary>
+public record UpdateChallengeRequest(
+    [Required] ChallengeType Type,
+    [Required, StringLength(120, MinimumLength = 1)] string Title,
+    [Required, StringLength(300, MinimumLength = 1)] string Summary,
+    [Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails);
