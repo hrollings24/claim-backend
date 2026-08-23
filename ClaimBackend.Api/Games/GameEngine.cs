@@ -193,7 +193,7 @@ public class GameEngine(IOptions<GamesOptions> options)
 
         team.Territories.Add(territory);
         board.Active.Remove(active);
-        TopUp(board, boroughId);
+        TopUp(board);
 
         if (wasHot)
         {
@@ -277,22 +277,22 @@ public class GameEngine(IOptions<GamesOptions> options)
         return new PlayResult(GameMutationStatus.Success, PlayEffect.CounterSucceeded);
     }
 
-    /// <summary>Replaces a resolved borough with one from the same zone, keeping the spread of travel.</summary>
-    private void TopUp(GameBoard board, string resolvedBoroughId)
+    /// <summary>
+    /// Replaces a resolved borough with any that is neither on the board nor already held.
+    /// Remaining holds exactly those: boroughs move out of it onto the board, and from the board
+    /// into a team's territory, so nothing in it is in play. It was shuffled when the game was
+    /// dealt, so taking the next one is as good as picking at random.
+    /// </summary>
+    private static void TopUp(GameBoard board)
     {
-        var zone = BoroughCatalogue.Find(resolvedBoroughId)?.Zone;
-
-        var replacement =
-            board.Remaining.FirstOrDefault(id => BoroughCatalogue.Find(id)?.Zone == zone)
-            ?? board.Remaining.FirstOrDefault();
-
-        if (replacement is null)
+        if (board.Remaining.Count == 0)
         {
             // Every borough in London is in play or held; the board just runs smaller.
             return;
         }
 
-        board.Remaining.Remove(replacement);
+        var replacement = board.Remaining[0];
+        board.Remaining.RemoveAt(0);
         board.Active.Add(new ActiveBorough { BoroughId = replacement });
     }
 

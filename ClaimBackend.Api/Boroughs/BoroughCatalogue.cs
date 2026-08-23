@@ -1,9 +1,8 @@
 namespace ClaimBackend.Api.Boroughs;
 
 /// <summary>
-/// Where a borough sits relative to the centre. Used when a resolved borough is replaced: the
-/// replacement is drawn from the same zone, so the board keeps a comparable spread of travel
-/// distances rather than drifting to one edge of the city.
+/// Where a borough sits relative to the centre. Shown on the board so players can see at a
+/// glance how far a borough is likely to be; it carries no rule of its own.
 /// </summary>
 public enum BoroughZone
 {
