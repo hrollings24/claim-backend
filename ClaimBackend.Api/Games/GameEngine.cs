@@ -15,7 +15,15 @@ public enum PlayEffect
     CounterSucceeded,
 }
 
-public record PlayResult(GameMutationStatus Status, PlayEffect Effect = PlayEffect.Nothing);
+/// <summary>
+/// <paramref name="CounterpartTeamId"/> is the other team involved — the one robbed, or the one
+/// handed a counter window. Carried out of the engine because by the time the caller sees the
+/// game the move has already been applied, and who it happened to is no longer recoverable.
+/// </summary>
+public record PlayResult(
+    GameMutationStatus Status,
+    PlayEffect Effect = PlayEffect.Nothing,
+    string? CounterpartTeamId = null);
 
 /// <summary>
 /// The rules. Every method mutates the game in place and is called inside the store's version
@@ -231,14 +239,14 @@ public class GameEngine(IOptions<GamesOptions> options)
                 ExpiresAt = now.AddMinutes(_options.CounterWindowMinutes),
             });
 
-            return new PlayResult(GameMutationStatus.Success, PlayEffect.StealFailed);
+            return new PlayResult(GameMutationStatus.Success, PlayEffect.StealFailed, holder.Id);
         }
 
         holder.Territories.Remove(territory);
         territory.Locked = true;
         team.Territories.Add(territory);
 
-        return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughStolen);
+        return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughStolen, holder.Id);
     }
 
     private static PlayResult PlayCounter(
@@ -274,7 +282,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         team.Territories.Add(territory);
         game.CounterWindows.Remove(window);
 
-        return new PlayResult(GameMutationStatus.Success, PlayEffect.CounterSucceeded);
+        return new PlayResult(GameMutationStatus.Success, PlayEffect.CounterSucceeded, holder.Id);
     }
 
     /// <summary>

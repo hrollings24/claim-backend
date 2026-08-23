@@ -5,6 +5,8 @@ using ClaimBackend.Api.Auth;
 using ClaimBackend.Api.Challenges;
 using ClaimBackend.Api.Data;
 using ClaimBackend.Api.Games;
+using ClaimBackend.Api.Controllers;
+using ClaimBackend.Api.Push;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -117,6 +119,20 @@ builder.Services.Configure<ChallengesOptions>(
     builder.Configuration.GetSection(ChallengesOptions.SectionName));
 
 builder.Services.AddSingleton<ChallengeStore>();
+
+builder.Services.Configure<PushOptions>(builder.Configuration.GetSection(PushOptions.SectionName));
+
+// A named client so push traffic gets its own connection pool and timeout, and a slow push
+// service can never hold up the request that triggered it for long.
+builder.Services.AddHttpClient(nameof(PushSender), client => client.Timeout = TimeSpan.FromSeconds(5));
+
+builder.Services.AddSingleton<PushSubscriptionStore>();
+builder.Services.AddSingleton<PushSender>();
+builder.Services.AddSingleton<GameNotifier>();
+builder.Services.AddSingleton<GameSweeper>();
+
+builder.Services.Configure<MaintenanceOptions>(
+    builder.Configuration.GetSection(MaintenanceOptions.SectionName));
 
 // A comma-separated string rather than a JSON array so production can override it with a
 // single Lambda environment variable (Cors__AllowedOrigins) instead of indexed array entries.

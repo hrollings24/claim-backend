@@ -95,6 +95,59 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         return response.Item is null || response.Item.Count == 0 ? null : FromItem(response.Item);
     }
 
+    /// <summary>
+    /// Every game still being played. Used by the scheduled sweep, which is the only thing that
+    /// moves a game's clock when nobody is looking at it. A scan, because games are keyed by
+    /// code and there is no index on status — fine for a table this size, and it runs a handful
+    /// of times an hour.
+    /// </summary>
+    public async Task<IReadOnlyList<Game>> ListInProgressAsync(CancellationToken cancellationToken)
+    {
+        var games = new List<Game>();
+        Dictionary<string, AttributeValue>? start = null;
+
+        do
+        {
+            var response = await dynamo.ScanAsync(
+                new ScanRequest
+                {
+                    TableName = _options.TableName,
+                    FilterExpression = "#status = :status",
+                    ExpressionAttributeNames = new Dictionary<string, string> { ["#status"] = "Status" },
+                    ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                    {
+                        [":status"] = new AttributeValue(nameof(GameStatus.InProgress)),
+                    },
+                    ExclusiveStartKey = start,
+                },
+                cancellationToken);
+
+            games.AddRange(response.Items.Select(FromItem));
+            start = response.LastEvaluatedKey is { Count: > 0 } ? response.LastEvaluatedKey : null;
+        }
+        while (start is not null);
+
+        return games;
+    }
+
+    /// <summary>
+    /// Applies a change made outside a request — the sweep bringing a clock forward. Returns
+    /// false if the game moved on in the meantime, in which case the next sweep will see it.
+    /// </summary>
+    public async Task<bool> TrySaveAsync(Game game, long expectedVersion, CancellationToken cancellationToken)
+    {
+        game.Version = expectedVersion + 1;
+        try
+        {
+            await WriteAsync(game, expectedVersion, cancellationToken);
+            return true;
+        }
+        catch (ConditionalCheckFailedException)
+        {
+            return false;
+        }
+    }
+
     public async Task<Game> CreateAsync(string hostSub, string hostName, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < MaxCodeAttempts; attempt++)
@@ -209,7 +262,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
     /// Plays a card from the caller's team hand at a borough, reporting the outcome of the
     /// challenge. The engine decides what that means — claim, steal, or a counter-attack.
     /// </summary>
-    public async Task<(GameMutationResult Result, PlayEffect Effect)> PlayAsync(
+    public async Task<(GameMutationResult Result, PlayResult Play)> PlayAsync(
         string code,
         string sub,
         string cardId,
@@ -218,7 +271,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         IReadOnlyList<Challenge> deck,
         CancellationToken cancellationToken)
     {
-        var effect = PlayEffect.Nothing;
+        var play = new PlayResult(GameMutationStatus.Conflict);
 
         var result = await MutateAsync(code, game =>
         {
@@ -233,15 +286,14 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 return GameMutationStatus.NotOnATeam;
             }
 
-            var play = engine.Play(
+            // A retry re-runs this, so the result always reflects the attempt that stuck.
+            play = engine.Play(
                 game, player.TeamId, cardId, boroughId, succeeded, deck, DateTimeOffset.UtcNow);
 
-            // A retry re-runs this, so the effect always reflects the attempt that stuck.
-            effect = play.Effect;
             return play.Status;
         }, cancellationToken);
 
-        return (result, effect);
+        return (result, play);
     }
 
     /// <summary>
@@ -482,6 +534,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         ["CounterWindows"] = Json(game.CounterWindows),
         ["StartedAt"] = OptionalTimestamp(game.StartedAt),
         ["EndsAt"] = OptionalTimestamp(game.EndsAt),
+        ["EndingSoonNotifiedAt"] = OptionalTimestamp(game.EndingSoonNotifiedAt),
         ["Teams"] = new AttributeValue
         {
             L = game.Teams
@@ -538,6 +591,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         CounterWindows = FromJson<List<CounterWindow>>(item, "CounterWindows") ?? [],
         StartedAt = OptionalDate(item, "StartedAt"),
         EndsAt = OptionalDate(item, "EndsAt"),
+        EndingSoonNotifiedAt = OptionalDate(item, "EndingSoonNotifiedAt"),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

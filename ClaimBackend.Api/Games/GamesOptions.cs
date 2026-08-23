@@ -45,4 +45,7 @@ public class GamesOptions
 
     /// <summary>How long a team has to hit back after surviving a failed steal.</summary>
     public int CounterWindowMinutes { get; set; } = 15;
+
+    /// <summary>How close to the end a game has to be before players are warned it is nearly over.</summary>
+    public int EndingSoonMinutes { get; set; } = 15;
 }

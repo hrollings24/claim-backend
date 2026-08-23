@@ -55,6 +55,12 @@ public class Game
     /// <summary>When the clock runs out and the highest score wins.</summary>
     public DateTimeOffset? EndsAt { get; set; }
 
+    /// <summary>
+    /// Set once the "not long left" warning has gone out, so a sweep that runs every few minutes
+    /// doesn't send it again on every pass.
+    /// </summary>
+    public DateTimeOffset? EndingSoonNotifiedAt { get; set; }
+
     /// <summary>Cognito `sub` of the player who may start the game. Moves on if they leave.</summary>
     public required string HostSub { get; set; }
 

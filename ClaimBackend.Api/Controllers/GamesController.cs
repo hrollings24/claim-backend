@@ -2,6 +2,7 @@ using ClaimBackend.Api.Auth;
 using ClaimBackend.Api.Boroughs;
 using ClaimBackend.Api.Challenges;
 using ClaimBackend.Api.Games;
+using ClaimBackend.Api.Push;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,7 +11,10 @@ namespace ClaimBackend.Api.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
-public class GamesController(GameStore store, ChallengeStore challenges) : ControllerBase
+public class GamesController(
+    GameStore store,
+    ChallengeStore challenges,
+    GameNotifier notifier) : ControllerBase
 {
     [HttpPost]
     public async Task<ActionResult<GameDto>> Create(
@@ -50,7 +54,7 @@ public class GamesController(GameStore store, ChallengeStore challenges) : Contr
     {
         var deck = await challenges.GetDeckAsync(cancellationToken);
 
-        var (result, _) = await store.PlayAsync(
+        var (result, play) = await store.PlayAsync(
             GameCodeGenerator.Normalize(code),
             Sub,
             request.CardId,
@@ -59,9 +63,16 @@ public class GamesController(GameStore store, ChallengeStore challenges) : Contr
             deck,
             cancellationToken);
 
-        return result.Status is GameMutationStatus.Success
-            ? ToDto(result.Game!)
-            : Failure(result.Status, code);
+        if (result.Status is not GameMutationStatus.Success)
+        {
+            return Failure(result.Status, code);
+        }
+
+        var game = result.Game!;
+        await notifier.PlayedAsync(
+            game, game.FindPlayer(Sub)?.TeamId ?? string.Empty, request.BoroughId, play, cancellationToken);
+
+        return ToDto(game);
     }
 
     [HttpPost("{code}/duration")]
@@ -135,6 +146,11 @@ public class GamesController(GameStore store, ChallengeStore challenges) : Contr
     {
         var deck = await challenges.GetDeckAsync(cancellationToken);
         var result = await store.StartAsync(GameCodeGenerator.Normalize(code), Sub, deck, cancellationToken);
+
+        if (result.Status is GameMutationStatus.Success)
+        {
+            await notifier.StartedAsync(result.Game!, cancellationToken);
+        }
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
