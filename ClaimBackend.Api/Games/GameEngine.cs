@@ -61,7 +61,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             Active = active.Select(id => new ActiveBorough { BoroughId = id }).ToList(),
             Remaining = pool.Skip(_options.ActiveBoroughCount).ToList(),
             HotBoroughId = active[Random.Shared.Next(active.Count)],
-            HotRotatesAt = now.AddMinutes(_options.HotRotationMinutes),
+            HotRotatesAt = now.AddMinutes(game.HotRotationMinutes),
         };
 
         game.Hands.Clear();
@@ -121,7 +121,7 @@ public class GameEngine(IOptions<GamesOptions> options)
 
         if (!hotStillActive || now >= board.HotRotatesAt)
         {
-            RotateHot(board, now);
+            RotateHot(board, game.HotRotationMinutes, now);
             changed = true;
         }
 
@@ -205,7 +205,7 @@ public class GameEngine(IOptions<GamesOptions> options)
 
         if (wasHot)
         {
-            RotateHot(board, now);
+            RotateHot(board, game.HotRotationMinutes, now);
         }
 
         return new PlayResult(
@@ -304,13 +304,13 @@ public class GameEngine(IOptions<GamesOptions> options)
         board.Active.Add(new ActiveBorough { BoroughId = replacement });
     }
 
-    private void RotateHot(GameBoard board, DateTimeOffset now)
+    private static void RotateHot(GameBoard board, int rotationMinutes, DateTimeOffset now)
     {
         board.HotBoroughId = board.Active.Count > 0
             ? board.Active[Random.Shared.Next(board.Active.Count)].BoroughId
             : null;
 
-        board.HotRotatesAt = now.AddMinutes(_options.HotRotationMinutes);
+        board.HotRotatesAt = now.AddMinutes(rotationMinutes);
     }
 
     /// <summary>

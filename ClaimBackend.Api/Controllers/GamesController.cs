@@ -87,6 +87,18 @@ public class GamesController(
             : Failure(result.Status, code);
     }
 
+    [HttpPost("{code}/hot-rotation")]
+    public async Task<ActionResult<GameDto>> SetHotRotation(
+        string code, [FromBody] SetHotRotationRequest request, CancellationToken cancellationToken)
+    {
+        var result = await store.SetHotRotationAsync(
+            GameCodeGenerator.Normalize(code), Sub, request.HotRotationMinutes, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
     [HttpPost("{code}/teams")]
     public async Task<ActionResult<GameDto>> CreateTeam(
         string code, [FromBody] CreateTeamRequest request, CancellationToken cancellationToken)
@@ -165,6 +177,7 @@ public class GamesController(
         game.IsHost(Sub),
         game.FindPlayer(Sub)?.TeamId,
         game.DurationMinutes,
+        game.HotRotationMinutes,
         BoardToDto(game),
         game.Players
             .Select(player => new GamePlayerDto(

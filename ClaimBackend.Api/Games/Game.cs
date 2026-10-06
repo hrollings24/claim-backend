@@ -73,6 +73,13 @@ public class Game
     public required int DurationMinutes { get; set; }
 
     /// <summary>
+    /// How long the hot borough stands before moving, set once at creation from
+    /// <see cref="GamesOptions.DefaultHotRotationMinutes"/> and editable by the host in the
+    /// lobby. It also moves the moment it is claimed, regardless of this value.
+    /// </summary>
+    public required int HotRotationMinutes { get; set; }
+
+    /// <summary>
     /// Incremented on every write and used as the condition on the next one, so two players
     /// acting at the same time can't overwrite each other's change to the roster.
     /// </summary>

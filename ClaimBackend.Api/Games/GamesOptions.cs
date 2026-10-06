@@ -40,8 +40,11 @@ public class GamesOptions
 
     public int HandSize { get; set; } = 5;
 
-    /// <summary>How long the hot borough stands before moving. It also moves the moment it is claimed.</summary>
-    public int HotRotationMinutes { get; set; } = 90;
+    /// <summary>
+    /// Starting value for how long the hot borough stands before moving. It also moves the
+    /// moment it is claimed. The host can change it in the lobby.
+    /// </summary>
+    public int DefaultHotRotationMinutes { get; set; } = 90;
 
     /// <summary>How long a team has to hit back after surviving a failed steal.</summary>
     public int CounterWindowMinutes { get; set; } = 15;

@@ -159,6 +159,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 HostSub = hostSub,
                 Status = GameStatus.Lobby,
                 DurationMinutes = _options.DefaultDurationMinutes,
+                HotRotationMinutes = _options.DefaultHotRotationMinutes,
                 CreatedAt = now,
                 Version = 1,
                 Players = [new GamePlayer { Sub = hostSub, Name = hostName, JoinedAt = now }],
@@ -315,6 +316,25 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             }
 
             game.DurationMinutes = durationMinutes;
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>How often the hot borough moves is a setting rather than a player choice, so it follows the same rule as duration: the host decides, and only before the game starts.</summary>
+    public Task<GameMutationResult> SetHotRotationAsync(
+        string code, string sub, int hotRotationMinutes, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            if (!game.IsHost(sub))
+            {
+                return GameMutationStatus.NotHost;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            game.HotRotationMinutes = hotRotationMinutes;
             return GameMutationStatus.Success;
         }, cancellationToken);
 
@@ -502,6 +522,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         ["CreatedAt"] = new AttributeValue(game.CreatedAt.ToString("O", CultureInfo.InvariantCulture)),
         ["Version"] = Number(game.Version),
         ["DurationMinutes"] = Number(game.DurationMinutes),
+        ["HotRotationMinutes"] = Number(game.HotRotationMinutes),
         // Measured from this write rather than from creation, so every action pushes the expiry
         // out and only genuinely idle lobbies age away. Basing it on CreatedAt would delete a
         // game mid-play once it had been running for the TTL — reachable now that a game can be
@@ -563,6 +584,10 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         DurationMinutes = item.TryGetValue("DurationMinutes", out var duration)
             ? int.Parse(duration.N, CultureInfo.InvariantCulture)
             : 60,
+        // Games created before the hot-rotation setting existed fall back to the old fixed value.
+        HotRotationMinutes = item.TryGetValue("HotRotationMinutes", out var hotRotation)
+            ? int.Parse(hotRotation.N, CultureInfo.InvariantCulture)
+            : 90,
         Players = item["Players"].L
             .Select(player => new GamePlayer
             {

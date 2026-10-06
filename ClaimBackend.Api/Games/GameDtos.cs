@@ -16,6 +16,7 @@ public record GameDto(
     bool YouAreHost,
     string? YourTeamId,
     int DurationMinutes,
+    int HotRotationMinutes,
     GameBoardDto? Board,
     IReadOnlyList<GamePlayerDto> Players,
     IReadOnlyList<GameTeamDto> Teams);
@@ -37,6 +38,10 @@ public record CreateTeamRequest(
 /// </summary>
 public record SetDurationRequest(
     [Range(1, 24 * 60)] int DurationMinutes);
+
+/// <summary>How long the hot borough stands before moving on its own.</summary>
+public record SetHotRotationRequest(
+    [Range(1, 24 * 60)] int HotRotationMinutes);
 
 public record ActiveBoroughDto(string Id, string Name, string Zone, bool IsHot);
 
