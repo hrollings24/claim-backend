@@ -19,11 +19,15 @@ public enum PlayEffect
 /// <paramref name="CounterpartTeamId"/> is the other team involved — the one robbed, or the one
 /// handed a counter window. Carried out of the engine because by the time the caller sees the
 /// game the move has already been applied, and who it happened to is no longer recoverable.
+/// <paramref name="BoroughId"/> is set only by <see cref="GameEngine.ResolveSteal"/>, whose caller
+/// has no borough of its own to notify about — a steal's target was chosen back when it was
+/// activated, not on the request that resolves it.
 /// </summary>
 public record PlayResult(
     GameMutationStatus Status,
     PlayEffect Effect = PlayEffect.Nothing,
-    string? CounterpartTeamId = null);
+    string? CounterpartTeamId = null,
+    string? BoroughId = null);
 
 /// <summary>
 /// The rules. Every method mutates the game in place and is called inside the store's version
@@ -147,9 +151,14 @@ public class GameEngine(IOptions<GamesOptions> options)
             return new PlayResult(GameMutationStatus.CardNotInHand);
         }
 
-        var result = card.Type is ChallengeType.Claim
-            ? PlayClaim(game, board, team, boroughId, succeeded, now)
-            : PlaySteal(game, team, boroughId, succeeded, now);
+        // A steal is hidden until activated and runs on its own timer, so it can only be resolved
+        // through ActivateSteal/ResolveSteal — never played outright the way a claim is.
+        if (card.Type is not ChallengeType.Claim)
+        {
+            return new PlayResult(GameMutationStatus.InvalidTarget);
+        }
+
+        var result = PlayClaim(game, board, team, boroughId, succeeded, now);
 
         // A card is spent whether or not the challenge came off, and the hand is topped back up.
         if (result.Status is GameMutationStatus.Success)
@@ -162,6 +171,94 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Commits a steal to a target: the countdown starts here, and the challenge is revealed to
+    /// the team from this moment on. There is no way back from this short of resolving it.
+    /// </summary>
+    public GameMutationStatus ActivateSteal(
+        Game game, string teamId, string cardId, string boroughId, DateTimeOffset now)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return GameMutationStatus.GameNotRunning;
+        }
+
+        var hand = game.FindHand(teamId);
+        var card = hand?.Cards.FirstOrDefault(c => c.Id == cardId);
+        if (hand is null || card is null)
+        {
+            return GameMutationStatus.CardNotInHand;
+        }
+
+        if (card.Type is not ChallengeType.Steal)
+        {
+            return GameMutationStatus.InvalidTarget;
+        }
+
+        if (card.ActivatedAt is not null)
+        {
+            return GameMutationStatus.AlreadyActivated;
+        }
+
+        var holder = game.FindTeamHolding(boroughId);
+        if (holder is null || holder.Id == teamId)
+        {
+            return GameMutationStatus.InvalidTarget;
+        }
+
+        if (holder.FindTerritory(boroughId)!.IsLocked)
+        {
+            return GameMutationStatus.BoroughLocked;
+        }
+
+        card.ActivatedAt = now;
+        card.ActivatedBoroughId = boroughId;
+
+        return GameMutationStatus.Success;
+    }
+
+    /// <summary>
+    /// Reports the outcome of an already-activated steal. Spent either way — a card is spent
+    /// whether or not the challenge came off, same as any other — and also if the target stopped
+    /// being a legal one while the clock ran (claimed, stolen, or locked by someone else in the
+    /// meantime): there is nothing left to do with it but let it go.
+    /// </summary>
+    public PlayResult ResolveSteal(
+        Game game, string teamId, string cardId, bool succeeded, IReadOnlyList<Challenge> deck, DateTimeOffset now)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return new PlayResult(GameMutationStatus.GameNotRunning);
+        }
+
+        var team = game.Teams.FirstOrDefault(t => t.Id == teamId);
+        var hand = game.FindHand(teamId);
+        var card = hand?.Cards.FirstOrDefault(c => c.Id == cardId);
+        if (team is null || hand is null || card is null)
+        {
+            return new PlayResult(GameMutationStatus.CardNotInHand);
+        }
+
+        if (card.ActivatedAt is null || card.ActivatedBoroughId is not { } boroughId)
+        {
+            return new PlayResult(GameMutationStatus.NotActivated);
+        }
+
+        var result = PlaySteal(game, team, boroughId, succeeded, now);
+        if (result.Status is not (GameMutationStatus.Success or GameMutationStatus.InvalidTarget or GameMutationStatus.BoroughLocked))
+        {
+            return result;
+        }
+
+        var replacement = DrawReplacement(deck, hand, card, _options.MinClaimCardsInHand);
+        hand.Cards.Remove(card);
+        hand.Cards.Add(replacement);
+
+        return result.Status is GameMutationStatus.Success
+            ? result with { BoroughId = boroughId }
+            : new PlayResult(GameMutationStatus.Success, BoroughId: boroughId);
     }
 
     private PlayResult PlayClaim(
@@ -359,6 +456,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         Title = challenge.Title,
         Summary = challenge.Summary,
         FurtherDetails = challenge.FurtherDetails,
+        StealMinutes = challenge.Type is ChallengeType.Steal ? challenge.EffectiveStealMinutes : null,
     };
 
 }

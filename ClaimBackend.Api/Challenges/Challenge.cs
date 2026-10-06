@@ -18,9 +18,21 @@ public class Challenge
     public required string Title { get; init; }
     public required string Summary { get; init; }
     public required string FurtherDetails { get; init; }
+
+    /// <summary>
+    /// Steal only. How long the countdown runs once a team activates this steal in a game. Null
+    /// for challenges written before this existed, or left blank since — <see cref="EffectiveStealMinutes"/>
+    /// is what dealing actually reads.
+    /// </summary>
+    public int? StealMinutes { get; init; }
+
     public required string CreatedBySub { get; init; }
     public required string CreatedByName { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
+
+    public const int DefaultStealMinutes = 5;
+
+    public int EffectiveStealMinutes => StealMinutes ?? DefaultStealMinutes;
 
     /// <summary>
     /// Sort key within the single challenges partition. Time first so a query returns newest

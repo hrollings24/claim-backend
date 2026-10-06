@@ -83,6 +83,45 @@ public class GamesController(
         return ToDto(game);
     }
 
+    /// <summary>
+    /// Commits a steal card to a target. From this moment the challenge is revealed to the
+    /// team's own view of the game and the countdown is running — there is no way back short of
+    /// resolving it.
+    /// </summary>
+    [HttpPost("{code}/activate-steal")]
+    public async Task<ActionResult<GameDto>> ActivateSteal(
+        string code, [FromBody] ActivateStealRequest request, CancellationToken cancellationToken)
+    {
+        var result = await store.ActivateStealAsync(
+            GameCodeGenerator.Normalize(code), Sub, request.CardId, request.BoroughId, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
+    /// <summary>Reports whether an already-activated steal came off.</summary>
+    [HttpPost("{code}/resolve-steal")]
+    public async Task<ActionResult<GameDto>> ResolveSteal(
+        string code, [FromBody] ResolveStealRequest request, CancellationToken cancellationToken)
+    {
+        var deck = await challenges.GetDeckAsync(cancellationToken);
+
+        var (result, play) = await store.ResolveStealAsync(
+            GameCodeGenerator.Normalize(code), Sub, request.CardId, request.Succeeded, deck, cancellationToken);
+
+        if (result.Status is not GameMutationStatus.Success)
+        {
+            return Failure(result.Status, code);
+        }
+
+        var game = result.Game!;
+        await notifier.PlayedAsync(
+            game, game.FindPlayer(Sub)?.TeamId ?? string.Empty, play.BoroughId ?? string.Empty, play, cancellationToken);
+
+        return ToDto(game);
+    }
+
     [HttpPost("{code}/duration")]
     public async Task<ActionResult<GameDto>> SetDuration(
         string code, [FromBody] SetDurationRequest request, CancellationToken cancellationToken)
@@ -232,10 +271,7 @@ public class GamesController(
             territories,
             yourTeamId is null
                 ? []
-                : game.FindHand(yourTeamId)?.Cards
-                    .Select(c => new HandCardDto(
-                        c.Id, c.Type.ToString(), c.Title, c.Summary, c.FurtherDetails))
-                    .ToList() ?? [],
+                : game.FindHand(yourTeamId)?.Cards.Select(ToHandCardDto).ToList() ?? [],
             game.Teams
                 .Select(team => new TeamScoreDto(
                     team.Id, team.Name, team.Territories.Count, team.BonusPoints, game.ScoreFor(team)))
@@ -248,6 +284,26 @@ public class GamesController(
                     game.Teams.FirstOrDefault(t => t.Id == counter.AgainstTeamId)?.Name ?? "another team",
                     counter.ExpiresAt),
             game.EndsAt);
+    }
+
+    /// <summary>
+    /// An unactivated steal is hidden — the real challenge never reaches the client — until the
+    /// team has committed to a target. A claim, or an activated steal, is always shown in full.
+    /// </summary>
+    private static HandCardDto ToHandCardDto(HandCard card)
+    {
+        var hidden = card.Type is ChallengeType.Steal && card.ActivatedAt is null;
+
+        return new HandCardDto(
+            card.Id,
+            card.Type.ToString(),
+            hidden ? "Steal challenge" : card.Title,
+            hidden ? "Pick a target to reveal it and start the clock." : card.Summary,
+            hidden ? string.Empty : card.FurtherDetails,
+            card.StealMinutes,
+            card.ActivatedAt is { } activatedAt && card.StealMinutes is { } minutes
+                ? activatedAt.AddMinutes(minutes)
+                : null);
     }
 
     private ActionResult GameNotFound(string code) =>
@@ -320,6 +376,14 @@ public class GamesController(
 
         GameMutationStatus.TooManyTeams => Problem(
             title: "This game already has the maximum number of teams",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.AlreadyActivated => Problem(
+            title: "That steal has already been activated",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotActivated => Problem(
+            title: "Pick a target to activate that steal before entering the outcome",
             statusCode: StatusCodes.Status409Conflict),
 
         // Every retry lost the version check, which means the lobby is unusually busy rather

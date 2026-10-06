@@ -43,6 +43,21 @@ public class HandCard
     public required string Title { get; init; }
     public required string Summary { get; init; }
     public required string FurtherDetails { get; init; }
+
+    /// <summary>
+    /// Steal only, fixed at deal time so a later edit to the challenge doesn't change a card
+    /// already in someone's hand.
+    /// </summary>
+    public int? StealMinutes { get; init; }
+
+    /// <summary>
+    /// Steal only. Null until the team commits to a target — the challenge stays hidden and the
+    /// clock hasn't started until then.
+    /// </summary>
+    public DateTimeOffset? ActivatedAt { get; set; }
+
+    /// <summary>The target chosen when activating. Set together with <see cref="ActivatedAt"/>.</summary>
+    public string? ActivatedBoroughId { get; set; }
 }
 
 public class TeamHand

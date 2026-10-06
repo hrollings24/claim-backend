@@ -27,6 +27,8 @@ public enum GameMutationStatus
     DuplicateTeamName,
     TooManyTeams,
     Conflict,
+    AlreadyActivated,
+    NotActivated,
 }
 
 public record GameMutationResult(GameMutationStatus Status, Game? Game);
@@ -320,6 +322,60 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             // A retry re-runs this, so the result always reflects the attempt that stuck.
             play = engine.Play(
                 game, player.TeamId, cardId, boroughId, succeeded, deck, DateTimeOffset.UtcNow);
+
+            return play.Status;
+        }, cancellationToken);
+
+        return (result, play);
+    }
+
+    /// <summary>
+    /// Commits a steal card to a target — the countdown starts here, and the challenge is
+    /// revealed to the acting team from this moment on.
+    /// </summary>
+    public Task<GameMutationResult> ActivateStealAsync(
+        string code, string sub, string cardId, string boroughId, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            var player = game.FindPlayer(sub);
+            if (player is null)
+            {
+                return GameMutationStatus.NotInGame;
+            }
+
+            if (player.TeamId is null)
+            {
+                return GameMutationStatus.NotOnATeam;
+            }
+
+            return engine.ActivateSteal(game, player.TeamId, cardId, boroughId, DateTimeOffset.UtcNow);
+        }, cancellationToken);
+
+    /// <summary>Reports the outcome of a steal already activated against its target.</summary>
+    public async Task<(GameMutationResult Result, PlayResult Play)> ResolveStealAsync(
+        string code,
+        string sub,
+        string cardId,
+        bool succeeded,
+        IReadOnlyList<Challenge> deck,
+        CancellationToken cancellationToken)
+    {
+        var play = new PlayResult(GameMutationStatus.Conflict);
+
+        var result = await MutateAsync(code, game =>
+        {
+            var player = game.FindPlayer(sub);
+            if (player is null)
+            {
+                return GameMutationStatus.NotInGame;
+            }
+
+            if (player.TeamId is null)
+            {
+                return GameMutationStatus.NotOnATeam;
+            }
+
+            play = engine.ResolveSteal(game, player.TeamId, cardId, succeeded, deck, DateTimeOffset.UtcNow);
 
             return play.Status;
         }, cancellationToken);

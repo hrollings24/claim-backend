@@ -49,8 +49,20 @@ public record ActiveBoroughDto(string Id, string Name, string Zone, bool IsHot);
 public record TerritoryDto(
     string Id, string Name, string TeamId, string TeamName, bool IsLocked);
 
+/// <summary>
+/// An unactivated steal's <paramref name="Title"/>/<paramref name="Summary"/>/<paramref name="FurtherDetails"/>
+/// are placeholder text, not the real challenge — the API never sends the real ones before the
+/// team commits to a target. <paramref name="ExpiresAt"/> is null until then, too; once it is
+/// set, the challenge is real and the countdown is running.
+/// </summary>
 public record HandCardDto(
-    string Id, string Type, string Title, string Summary, string FurtherDetails);
+    string Id,
+    string Type,
+    string Title,
+    string Summary,
+    string FurtherDetails,
+    int? StealMinutes,
+    DateTimeOffset? ExpiresAt);
 
 public record TeamScoreDto(string TeamId, string Name, int Territories, int BonusPoints, int Score);
 
@@ -74,4 +86,12 @@ public record GameBoardDto(
 public record PlayCardRequest(
     [Required] string CardId,
     [Required] string BoroughId,
+    bool Succeeded);
+
+public record ActivateStealRequest(
+    [Required] string CardId,
+    [Required] string BoroughId);
+
+public record ResolveStealRequest(
+    [Required] string CardId,
     bool Succeeded);

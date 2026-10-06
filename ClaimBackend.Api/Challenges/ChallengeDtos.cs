@@ -12,6 +12,8 @@ public record ChallengeDto(
     string Title,
     string Summary,
     string FurtherDetails,
+    /// <summary>Steal only. Null means the default — the challenge predates this setting.</summary>
+    int? StealMinutes,
     string CreatedByName,
     DateTimeOffset CreatedAt,
     /// <summary>Whether the caller wrote it, and may therefore change or remove it.</summary>
@@ -22,6 +24,7 @@ public record CreateChallengeRequest(
     [Required, StringLength(120, MinimumLength = 1)] string Title,
     [Required, StringLength(300, MinimumLength = 1)] string Summary,
     [Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails,
+    [Range(1, 120)] int? StealMinutes,
     string? DisplayName);
 
 /// <summary>
@@ -32,4 +35,5 @@ public record UpdateChallengeRequest(
     [Required] ChallengeType Type,
     [Required, StringLength(120, MinimumLength = 1)] string Title,
     [Required, StringLength(300, MinimumLength = 1)] string Summary,
-    [Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails);
+    [Required, StringLength(4000, MinimumLength = 1)] string FurtherDetails,
+    [Range(1, 120)] int? StealMinutes);

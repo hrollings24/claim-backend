@@ -99,6 +99,7 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         string title,
         string summary,
         string furtherDetails,
+        int? stealMinutes,
         CancellationToken cancellationToken)
     {
         var existing = await FindAsync(id, cancellationToken);
@@ -123,6 +124,7 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
                     Title = title,
                     Summary = summary,
                     FurtherDetails = furtherDetails,
+                    StealMinutes = stealMinutes,
                     CreatedBySub = existing.CreatedBySub,
                     CreatedByName = existing.CreatedByName,
                     CreatedAt = existing.CreatedAt,
@@ -204,19 +206,29 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         };
     }
 
-    private static Dictionary<string, AttributeValue> ToItem(Challenge challenge) => new()
+    private static Dictionary<string, AttributeValue> ToItem(Challenge challenge)
     {
-        [PartitionAttribute] = new AttributeValue(Partition),
-        [SortAttribute] = new AttributeValue(challenge.SortKey),
-        ["Id"] = new AttributeValue(challenge.Id),
-        ["Type"] = new AttributeValue(challenge.Type.ToString()),
-        ["Title"] = new AttributeValue(challenge.Title),
-        ["Summary"] = new AttributeValue(challenge.Summary),
-        ["FurtherDetails"] = new AttributeValue(challenge.FurtherDetails),
-        ["CreatedBySub"] = new AttributeValue(challenge.CreatedBySub),
-        ["CreatedByName"] = new AttributeValue(challenge.CreatedByName),
-        ["CreatedAt"] = new AttributeValue(challenge.CreatedAt.ToString("O", CultureInfo.InvariantCulture)),
-    };
+        var item = new Dictionary<string, AttributeValue>
+        {
+            [PartitionAttribute] = new AttributeValue(Partition),
+            [SortAttribute] = new AttributeValue(challenge.SortKey),
+            ["Id"] = new AttributeValue(challenge.Id),
+            ["Type"] = new AttributeValue(challenge.Type.ToString()),
+            ["Title"] = new AttributeValue(challenge.Title),
+            ["Summary"] = new AttributeValue(challenge.Summary),
+            ["FurtherDetails"] = new AttributeValue(challenge.FurtherDetails),
+            ["CreatedBySub"] = new AttributeValue(challenge.CreatedBySub),
+            ["CreatedByName"] = new AttributeValue(challenge.CreatedByName),
+            ["CreatedAt"] = new AttributeValue(challenge.CreatedAt.ToString("O", CultureInfo.InvariantCulture)),
+        };
+
+        if (challenge.StealMinutes is { } stealMinutes)
+        {
+            item["StealMinutes"] = new AttributeValue { N = stealMinutes.ToString(CultureInfo.InvariantCulture) };
+        }
+
+        return item;
+    }
 
     private static Challenge FromItem(Dictionary<string, AttributeValue> item) => new()
     {
@@ -228,6 +240,9 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         Title = item["Title"].S,
         Summary = item["Summary"].S,
         FurtherDetails = item["FurtherDetails"].S,
+        StealMinutes = item.TryGetValue("StealMinutes", out var stealMinutes)
+            ? int.Parse(stealMinutes.N, CultureInfo.InvariantCulture)
+            : null,
         CreatedBySub = item["CreatedBySub"].S,
         CreatedByName = item["CreatedByName"].S,
         CreatedAt = DateTimeOffset.Parse(item["CreatedAt"].S, CultureInfo.InvariantCulture),

@@ -40,6 +40,7 @@ public class ChallengesController(ChallengeStore store) : ControllerBase
                 Title = request.Title.Trim(),
                 Summary = request.Summary.Trim(),
                 FurtherDetails = request.FurtherDetails.Trim(),
+                StealMinutes = request.Type is ChallengeType.Steal ? request.StealMinutes : null,
                 CreatedBySub = User.GetSubject(),
                 CreatedByName = CallerIdentity.DisplayNameOrDefault(request.DisplayName),
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -68,6 +69,7 @@ public class ChallengesController(ChallengeStore store) : ControllerBase
             request.Title.Trim(),
             request.Summary.Trim(),
             request.FurtherDetails.Trim(),
+            request.Type is ChallengeType.Steal ? request.StealMinutes : null,
             cancellationToken);
 
         if (status is not ChallengeMutationStatus.Success)
@@ -109,6 +111,7 @@ public class ChallengesController(ChallengeStore store) : ControllerBase
         challenge.Title,
         challenge.Summary,
         challenge.FurtherDetails,
+        challenge.StealMinutes,
         challenge.CreatedByName,
         challenge.CreatedAt,
         challenge.CreatedBySub == User.GetSubject());
