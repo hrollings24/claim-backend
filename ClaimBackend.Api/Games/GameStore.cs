@@ -131,6 +131,36 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
     }
 
     /// <summary>
+    /// Every game this player still has a seat in, regardless of status. Used to offer a way
+    /// back into a game after the player has navigated somewhere that forgot its code. Players is
+    /// a list of maps, which DynamoDB can't filter into on its own, so — same trade-off as the
+    /// sweep's scan — this reads the whole table and matches here instead, once each item is
+    /// loaded.
+    /// </summary>
+    public async Task<IReadOnlyList<Game>> ListForPlayerAsync(string sub, CancellationToken cancellationToken)
+    {
+        var games = new List<Game>();
+        Dictionary<string, AttributeValue>? start = null;
+
+        do
+        {
+            var response = await dynamo.ScanAsync(
+                new ScanRequest
+                {
+                    TableName = _options.TableName,
+                    ExclusiveStartKey = start,
+                },
+                cancellationToken);
+
+            games.AddRange(response.Items.Select(FromItem).Where(game => game.FindPlayer(sub) is not null));
+            start = response.LastEvaluatedKey is { Count: > 0 } ? response.LastEvaluatedKey : null;
+        }
+        while (start is not null);
+
+        return games;
+    }
+
+    /// <summary>
     /// Applies a change made outside a request — the sweep bringing a clock forward. Returns
     /// false if the game moved on in the meantime, in which case the next sweep will see it.
     /// </summary>

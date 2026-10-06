@@ -24,6 +24,14 @@ public class GamesController(
         return CreatedAtAction(nameof(Get), new { code = game.Code }, ToDto(game));
     }
 
+    /// <summary>Every game the caller still has a seat in, for the join page to offer a way back.</summary>
+    [HttpGet("mine")]
+    public async Task<ActionResult<IReadOnlyList<GameDto>>> Mine(CancellationToken cancellationToken)
+    {
+        var games = await store.ListForPlayerAsync(Sub, cancellationToken);
+        return games.Select(ToDto).ToList();
+    }
+
     [HttpGet("{code}")]
     public async Task<ActionResult<GameDto>> Get(string code, CancellationToken cancellationToken)
     {
