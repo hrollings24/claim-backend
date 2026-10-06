@@ -47,7 +47,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         if (deck.Count < _options.HandSize
-            || !deck.Any(c => c.Type is ChallengeType.Claim)
+            || deck.Count(c => c.Type is ChallengeType.Claim) < _options.MinClaimCardsInHand
             || !deck.Any(c => c.Type is ChallengeType.Steal))
         {
             return GameMutationStatus.NotEnoughChallenges;
@@ -70,15 +70,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             game.Hands.Add(new TeamHand
             {
                 TeamId = team.Id,
-                // Shuffle and take, rather than drawing each card independently: independent
-                // draws repeat, and with a small deck a five card hand was coming up with two
-                // pairs. Two teams can still share a challenge — with fewer cards than the
-                // table needs, they have to.
-                Cards = deck
-                    .OrderBy(_ => Random.Shared.Next())
-                    .Take(_options.HandSize)
-                    .Select(ToHandCard)
-                    .ToList(),
+                Cards = DealHand(deck, _options.HandSize, _options.MinClaimCardsInHand),
             });
         }
 
@@ -164,7 +156,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         {
             // Chosen before the played card leaves the hand, so the challenge just attempted
             // isn't handed straight back.
-            var replacement = DrawReplacement(deck, hand);
+            var replacement = DrawReplacement(deck, hand, card, _options.MinClaimCardsInHand);
             hand.Cards.Remove(card);
             hand.Cards.Add(replacement);
         }
@@ -314,14 +306,47 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>
-    /// Draws a card the team isn't already holding. If they hold the whole deck — possible when
-    /// there are barely more challenges than a hand needs — a repeat is unavoidable.
+    /// Shuffles a hand of the requested size, guaranteeing at least <paramref name="minClaimCards"/>
+    /// claim challenges so a team is never left with nothing but steals to play.
     /// </summary>
-    private static HandCard DrawReplacement(IReadOnlyList<Challenge> deck, TeamHand hand)
+    private static List<HandCard> DealHand(IReadOnlyList<Challenge> deck, int handSize, int minClaimCards)
     {
+        var claims = deck
+            .Where(c => c.Type is ChallengeType.Claim)
+            .OrderBy(_ => Random.Shared.Next())
+            .Take(minClaimCards)
+            .ToList();
+
+        var claimIds = claims.Select(c => c.Id).ToHashSet();
+
+        // Shuffle and take the rest, rather than drawing each card independently: independent
+        // draws repeat, and with a small deck a five card hand was coming up with two pairs. Two
+        // teams can still share a challenge — with fewer cards than the table needs, they have to.
+        var rest = deck
+            .Where(c => !claimIds.Contains(c.Id))
+            .OrderBy(_ => Random.Shared.Next())
+            .Take(Math.Max(0, handSize - claims.Count));
+
+        return claims.Concat(rest).OrderBy(_ => Random.Shared.Next()).Select(ToHandCard).ToList();
+    }
+
+    /// <summary>
+    /// Draws a card the team isn't already holding. If they hold the whole deck — possible when
+    /// there are barely more challenges than a hand needs — a repeat is unavoidable. Forced to a
+    /// claim challenge if the one just played was the hand's last claim above the minimum, so the
+    /// hand never drops below it.
+    /// </summary>
+    private static HandCard DrawReplacement(
+        IReadOnlyList<Challenge> deck, TeamHand hand, HandCard played, int minClaimCards)
+    {
+        var remainingClaims = hand.Cards.Count(c => c.Type is ChallengeType.Claim)
+            - (played.Type is ChallengeType.Claim ? 1 : 0);
+        var needsClaim = remainingClaims < minClaimCards;
+
         var held = hand.Cards.Select(c => c.ChallengeId).ToHashSet();
-        var unheld = deck.Where(challenge => !held.Contains(challenge.Id)).ToList();
-        var pool = unheld.Count > 0 ? unheld : deck;
+        var candidates = needsClaim ? deck.Where(c => c.Type is ChallengeType.Claim).ToList() : deck;
+        var unheld = candidates.Where(challenge => !held.Contains(challenge.Id)).ToList();
+        var pool = unheld.Count > 0 ? unheld : candidates;
 
         return ToHandCard(pool[Random.Shared.Next(pool.Count)]);
     }

@@ -283,7 +283,7 @@ public class GamesController(
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.NotEnoughChallenges => Problem(
-            title: "Not enough challenges to deal from — you need at least five, including at least one claim and one steal",
+            title: "Not enough challenges to deal from — you need at least five, including at least three claim and one steal",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.NotOnATeam => Problem(

@@ -41,6 +41,12 @@ public class GamesOptions
     public int HandSize { get; set; } = 5;
 
     /// <summary>
+    /// A hand that's gone all steal has nothing to do until it draws a claim. Dealing and
+    /// replacement both keep at least this many claim challenges in a hand at all times.
+    /// </summary>
+    public int MinClaimCardsInHand { get; set; } = 3;
+
+    /// <summary>
     /// Starting value for how long the hot borough stands before moving. It also moves the
     /// moment it is claimed. The host can change it in the lobby.
     /// </summary>
