@@ -3,6 +3,7 @@ using Amazon.Lambda.AspNetCoreServer.Hosting;
 using Amazon.Runtime;
 using ClaimBackend.Api.Auth;
 using ClaimBackend.Api.Challenges;
+using ClaimBackend.Api.Powers;
 using ClaimBackend.Api.Data;
 using ClaimBackend.Api.Games;
 using ClaimBackend.Api.Controllers;
@@ -119,6 +120,7 @@ builder.Services.Configure<ChallengesOptions>(
     builder.Configuration.GetSection(ChallengesOptions.SectionName));
 
 builder.Services.AddSingleton<ChallengeStore>();
+builder.Services.AddSingleton<PowerConfigurationStore>();
 
 builder.Services.Configure<PushOptions>(builder.Configuration.GetSection(PushOptions.SectionName));
 

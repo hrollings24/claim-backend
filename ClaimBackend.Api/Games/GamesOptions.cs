@@ -40,20 +40,20 @@ public class GamesOptions
 
     public int HandSize { get; set; } = 5;
 
+    /// <summary>Unplayed power cards a team may hold at once. Played ones don't count.</summary>
+    public int MaxPowerCards { get; set; } = 5;
+
     /// <summary>
-    /// A hand that's gone all steal has nothing to do until it draws a claim. Dealing and
-    /// replacement both keep at least this many claim challenges in a hand at all times.
+    /// Claiming the hot borough multiplies both how many power cards are drawn and how many the
+    /// team may keep.
     /// </summary>
-    public int MinClaimCardsInHand { get; set; } = 3;
+    public int HotClaimPowerMultiplier { get; set; } = 2;
 
     /// <summary>
     /// Starting value for how long the hot borough stands before moving. It also moves the
     /// moment it is claimed. The host can change it in the lobby.
     /// </summary>
     public int DefaultHotRotationMinutes { get; set; } = 90;
-
-    /// <summary>How long a team has to hit back after surviving a failed steal.</summary>
-    public int CounterWindowMinutes { get; set; } = 15;
 
     /// <summary>How close to the end a game has to be before players are warned it is nearly over.</summary>
     public int EndingSoonMinutes { get; set; } = 15;

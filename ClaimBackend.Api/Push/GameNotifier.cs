@@ -6,7 +6,7 @@ namespace ClaimBackend.Api.Push;
 /// <summary>
 /// Decides what a game event is worth telling people, and which people. Deliberately quiet:
 /// a phone that buzzes for everything gets silenced, and then the notifications that matter —
-/// a counter window closing in fifteen minutes — go unseen with the rest.
+/// a borough being stolen out from under you — go unseen with the rest.
 /// </summary>
 public class GameNotifier(PushSender sender)
 {
@@ -28,7 +28,7 @@ public class GameNotifier(PushSender sender)
                 Everyone(game, except: actingTeamId),
                 new PushNotification(
                     $"{actor} took the hot borough",
-                    $"{borough} is theirs for good, and worth two. A new borough is hot.",
+                    $"{borough} is worth two to them, and they drew double power cards. A new borough is hot.",
                     Url(game)),
                 cancellationToken),
 
@@ -37,25 +37,15 @@ public class GameNotifier(PushSender sender)
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
                     $"{actor} stole {borough}",
-                    "It is locked to them now — that one is settled.",
+                    "It's theirs now — unless you steal it back.",
                     Url(game)),
                 cancellationToken),
 
-            // Time critical: the window shuts in fifteen minutes whether or not they noticed.
             PlayEffect.StealFailed => sender.SendAsync(
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
-                    $"{actor} failed a steal on you",
-                    "You have 15 minutes to complete a claim challenge and take any borough of theirs.",
-                    Url(game),
-                    Tag: "counter"),
-                cancellationToken),
-
-            PlayEffect.CounterSucceeded => sender.SendAsync(
-                InTeam(game, play.CounterpartTeamId),
-                new PushNotification(
-                    $"{actor} hit back and took {borough}",
-                    "That was their counter-attack for the steal you missed.",
+                    $"{actor} failed a steal on {borough}",
+                    "You held on, and drew power cards for it. Pick one to keep.",
                     Url(game)),
                 cancellationToken),
 
@@ -77,7 +67,7 @@ public class GameNotifier(PushSender sender)
             Everyone(game),
             new PushNotification(
                 $"{BoroughCatalogue.NameOf(boroughId)} is now hot",
-                "Worth two points, and locked for good once claimed.",
+                "Worth two points, and double power cards for whoever claims it.",
                 Url(game),
                 // Replaces the previous hot notification rather than stacking beside it — only
                 // one borough is ever hot, so an older one is just wrong.

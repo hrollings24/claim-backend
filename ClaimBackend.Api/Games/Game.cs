@@ -41,6 +41,13 @@ public class Game
     public required DateTimeOffset CreatedAt { get; init; }
     public required List<GamePlayer> Players { get; init; }
 
+    /// <summary>
+    /// Players who left once the game was under way, kept with their team so that joining again
+    /// puts them back where they were. Nobody new can join a game in progress, so without this a
+    /// mis-tapped leave would be final.
+    /// </summary>
+    public required List<GamePlayer> FormerPlayers { get; init; }
+
     public required List<GameTeam> Teams { get; init; }
 
     /// <summary>Null until the game starts.</summary>
@@ -48,7 +55,20 @@ public class Game
 
     public required List<TeamHand> Hands { get; init; }
 
-    public required List<CounterWindow> CounterWindows { get; init; }
+    /// <summary>Power cards held and waiting to be chosen, per team.</summary>
+    public required List<TeamPowers> Powers { get; init; }
+
+    /// <summary>The power card configuration the host picked in the lobby. A game can't start without one.</summary>
+    public string? PowerConfigurationId { get; set; }
+
+    /// <summary>
+    /// Its name when picked, refreshed at the start, so the lobby can show it without looking
+    /// the configuration up.
+    /// </summary>
+    public string? PowerConfigurationName { get; set; }
+
+    /// <summary>Built from the configuration when the game starts; null until then.</summary>
+    public PowerDeck? PowerDeck { get; set; }
 
     public DateTimeOffset? StartedAt { get; set; }
 
@@ -92,6 +112,8 @@ public class Game
     public GameTeam? FindTeam(string teamId) => Teams.FirstOrDefault(t => t.Id == teamId);
 
     public TeamHand? FindHand(string teamId) => Hands.FirstOrDefault(h => h.TeamId == teamId);
+
+    public TeamPowers? FindPowers(string teamId) => Powers.FirstOrDefault(p => p.TeamId == teamId);
 
     public GameTeam? FindTeamHolding(string boroughId) =>
         Teams.FirstOrDefault(t => t.FindTerritory(boroughId) is not null);

@@ -36,11 +36,54 @@ that code. The lobby shows who is in, and the host starts it.
 | ------ | ------------------------- | -------------------------------------------------- |
 | POST   | `/api/games`              | Creates a game; the caller becomes host            |
 | GET    | `/api/games/{code}`       | Current roster and status — the lobby polls this   |
-| POST   | `/api/games/{code}/join`  | Joins; re-joining is a no-op, not an error         |
-| POST   | `/api/games/{code}/leave` | Leaves; hands off the host role, deletes if empty  |
+| POST   | `/api/games/{code}/join`  | Joins; re-joining is a no-op, not an error. Once started, only players who left can come back, onto their old team |
+| POST   | `/api/games/{code}/leave` | Leaves; hands off the host role, deletes if empty and nobody left mid-game |
 | POST   | `/api/games/{code}/start` | Host only; moves the game from `Lobby` to `InProgress` |
 
 All of them require a Cognito access token.
+
+### Playing
+
+Each team holds five **claim** challenges. Completing one at an active borough claims it and
+draws power cards — as many as the challenge says (`PowerDraws`, 1–5, default 2), of which the
+team keeps one. The hot borough is worth an extra point, draws twice as many, and lets the team
+keep two. A failed claim spends the card and draws nothing.
+
+**Power cards** (`Powers/PowerCatalogue.cs`) are **Steal** and the honour-system curse
+**No tube** (20 minutes). A team holds at most five unplayed; played ones stay listed, marked as
+played. Curses are only recorded — the team tells its target over the group chat.
+
+Each game draws from one shared power deck, built from the **power card configuration** the
+host picks in the lobby (a game can't start without one). Cards a team doesn't keep, or later
+discards, go to a discard pile that is shuffled back in when the deck runs out; kept and played
+cards never return, so "5 Steal" means at most five Steals in the whole game. The deck is copied
+at the start, so editing a configuration never changes a game in progress.
+
+Configurations are shared by everyone and anyone can edit them. They live in the challenges
+table under their own `POWER_CONFIG` partition, so they need no extra infrastructure.
+
+| Method | Route                                  | Notes                                               |
+| ------ | -------------------------------------- | --------------------------------------------------- |
+| GET    | `/api/power-configurations`            | All configurations, every card listed with its count |
+| GET    | `/api/power-configurations/cards`      | Every card a configuration can include              |
+| GET    | `/api/power-configurations/{id}`       |                                                     |
+| POST   | `/api/power-configurations`            | `{ name, counts: { "steal": 5, "no-tube": 2 } }`     |
+| PUT    | `/api/power-configurations/{id}`       | Same body; replaces the name and all counts         |
+| POST   | `/api/games/{code}/power-configuration` | Host only, in the lobby: `{ configurationId }`     |
+
+Playing a **Steal** at a borough another team holds reveals a random steal challenge and starts
+its clock. Report the result before it runs out: success moves the borough, failure (or the
+clock running out) moves nothing and the defending team draws the steal challenge's
+`PowerDraws`, keeping one. Nothing is ever locked — rare steals are what stop boroughs
+bouncing back and forth. A borough is hot at most once per game.
+
+| Method | Route                                           | Notes                                       |
+| ------ | ----------------------------------------------- | ------------------------------------------- |
+| POST   | `/api/games/{code}/play`                        | Claim: `{ cardId, boroughId, succeeded }`   |
+| POST   | `/api/games/{code}/powers/offers/{offerId}/keep` | `{ cardIds }`; empty turns the offer down  |
+| POST   | `/api/games/{code}/powers/{cardId}/play`        | `{ boroughId }`, needed for a Steal only    |
+| POST   | `/api/games/{code}/powers/{cardId}/resolve`     | Steal only: `{ succeeded }`, before the clock runs out |
+| POST   | `/api/games/{code}/powers/{cardId}/discard`     | Drops an unplayed card to make room         |
 
 Codes come from a 32-character alphabet with `I`, `O`, `0` and `1` left out, since they get read
 aloud and typed by hand.

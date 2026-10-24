@@ -100,6 +100,7 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         string summary,
         string furtherDetails,
         int? stealMinutes,
+        int? powerDraws,
         CancellationToken cancellationToken)
     {
         var existing = await FindAsync(id, cancellationToken);
@@ -125,6 +126,7 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
                     Summary = summary,
                     FurtherDetails = furtherDetails,
                     StealMinutes = stealMinutes,
+                    PowerDraws = powerDraws,
                     CreatedBySub = existing.CreatedBySub,
                     CreatedByName = existing.CreatedByName,
                     CreatedAt = existing.CreatedAt,
@@ -227,6 +229,11 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
             item["StealMinutes"] = new AttributeValue { N = stealMinutes.ToString(CultureInfo.InvariantCulture) };
         }
 
+        if (challenge.PowerDraws is { } powerDraws)
+        {
+            item["PowerDraws"] = new AttributeValue { N = powerDraws.ToString(CultureInfo.InvariantCulture) };
+        }
+
         return item;
     }
 
@@ -242,6 +249,9 @@ public class ChallengeStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         FurtherDetails = item["FurtherDetails"].S,
         StealMinutes = item.TryGetValue("StealMinutes", out var stealMinutes)
             ? int.Parse(stealMinutes.N, CultureInfo.InvariantCulture)
+            : null,
+        PowerDraws = item.TryGetValue("PowerDraws", out var powerDraws)
+            ? int.Parse(powerDraws.N, CultureInfo.InvariantCulture)
             : null,
         CreatedBySub = item["CreatedBySub"].S,
         CreatedByName = item["CreatedByName"].S,

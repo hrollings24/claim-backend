@@ -2,9 +2,11 @@ using ClaimBackend.Api.Auth;
 using ClaimBackend.Api.Boroughs;
 using ClaimBackend.Api.Challenges;
 using ClaimBackend.Api.Games;
+using ClaimBackend.Api.Powers;
 using ClaimBackend.Api.Push;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace ClaimBackend.Api.Controllers;
 
@@ -14,7 +16,9 @@ namespace ClaimBackend.Api.Controllers;
 public class GamesController(
     GameStore store,
     ChallengeStore challenges,
-    GameNotifier notifier) : ControllerBase
+    GameNotifier notifier,
+    PowerConfigurationStore powerConfigurations,
+    IOptions<GamesOptions> options) : ControllerBase
 {
     [HttpPost]
     public async Task<ActionResult<GameDto>> Create(
@@ -52,9 +56,9 @@ public class GamesController(
     }
 
     /// <summary>
-    /// Plays a card at a borough and reports whether the challenge came off. Which of claim,
-    /// steal or counter-attack that amounts to is the engine's decision, from the card's kind
-    /// and who holds the borough.
+    /// Plays a claim challenge from the hand at an active borough and reports whether it came
+    /// off. A success claims the borough and draws power cards, which arrive as an offer to
+    /// choose from.
     /// </summary>
     [HttpPost("{code}/play")]
     public async Task<ActionResult<GameDto>> Play(
@@ -83,32 +87,45 @@ public class GamesController(
         return ToDto(game);
     }
 
-    /// <summary>
-    /// Commits a steal card to a target. From this moment the challenge is revealed to the
-    /// team's own view of the game and the countdown is running — there is no way back short of
-    /// resolving it.
-    /// </summary>
-    [HttpPost("{code}/activate-steal")]
-    public async Task<ActionResult<GameDto>> ActivateSteal(
-        string code, [FromBody] ActivateStealRequest request, CancellationToken cancellationToken)
+    /// <summary>Keeps up to the offer's allowance of its cards; the rest are discarded.</summary>
+    [HttpPost("{code}/powers/offers/{offerId}/keep")]
+    public async Task<ActionResult<GameDto>> KeepPowers(
+        string code, string offerId, [FromBody] KeepPowersRequest request, CancellationToken cancellationToken)
     {
-        var result = await store.ActivateStealAsync(
-            GameCodeGenerator.Normalize(code), Sub, request.CardId, request.BoroughId, cancellationToken);
+        var result = await store.KeepPowersAsync(
+            GameCodeGenerator.Normalize(code), Sub, offerId, request.CardIds.ToList(), cancellationToken);
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
             : Failure(result.Status, code);
     }
 
-    /// <summary>Reports whether an already-activated steal came off.</summary>
-    [HttpPost("{code}/resolve-steal")]
-    public async Task<ActionResult<GameDto>> ResolveSteal(
-        string code, [FromBody] ResolveStealRequest request, CancellationToken cancellationToken)
+    /// <summary>
+    /// Plays a power card, which then stays in the team's list marked as played. A Steal needs a
+    /// target: the challenge is revealed and its countdown starts from this moment, with no way
+    /// back short of resolving it.
+    /// </summary>
+    [HttpPost("{code}/powers/{cardId}/play")]
+    public async Task<ActionResult<GameDto>> PlayPower(
+        string code, string cardId, [FromBody] PlayPowerRequest? request, CancellationToken cancellationToken)
     {
         var deck = await challenges.GetDeckAsync(cancellationToken);
 
+        var result = await store.PlayPowerAsync(
+            GameCodeGenerator.Normalize(code), Sub, cardId, request?.BoroughId, deck, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
+    /// <summary>Reports whether a running steal came off. Must arrive before its clock runs out.</summary>
+    [HttpPost("{code}/powers/{cardId}/resolve")]
+    public async Task<ActionResult<GameDto>> ResolveSteal(
+        string code, string cardId, [FromBody] ResolveStealRequest request, CancellationToken cancellationToken)
+    {
         var (result, play) = await store.ResolveStealAsync(
-            GameCodeGenerator.Normalize(code), Sub, request.CardId, request.Succeeded, deck, cancellationToken);
+            GameCodeGenerator.Normalize(code), Sub, cardId, request.Succeeded, cancellationToken);
 
         if (result.Status is not GameMutationStatus.Success)
         {
@@ -122,12 +139,42 @@ public class GamesController(
         return ToDto(game);
     }
 
+    /// <summary>Throws away an unplayed power card, to make room under the limit.</summary>
+    [HttpPost("{code}/powers/{cardId}/discard")]
+    public async Task<ActionResult<GameDto>> DiscardPower(
+        string code, string cardId, CancellationToken cancellationToken)
+    {
+        var result = await store.DiscardPowerAsync(GameCodeGenerator.Normalize(code), Sub, cardId, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
     [HttpPost("{code}/duration")]
     public async Task<ActionResult<GameDto>> SetDuration(
         string code, [FromBody] SetDurationRequest request, CancellationToken cancellationToken)
     {
         var result = await store.SetDurationAsync(
             GameCodeGenerator.Normalize(code), Sub, request.DurationMinutes, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
+    [HttpPost("{code}/power-configuration")]
+    public async Task<ActionResult<GameDto>> SetPowerConfiguration(
+        string code, [FromBody] SetPowerConfigurationRequest request, CancellationToken cancellationToken)
+    {
+        var configuration = await powerConfigurations.FindAsync(request.ConfigurationId, cancellationToken);
+        if (configuration is null)
+        {
+            return Failure(GameMutationStatus.PowerConfigurationNotFound, code);
+        }
+
+        var result = await store.SetPowerConfigurationAsync(
+            GameCodeGenerator.Normalize(code), Sub, configuration, cancellationToken);
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
@@ -203,8 +250,17 @@ public class GamesController(
     [HttpPost("{code}/start")]
     public async Task<ActionResult<GameDto>> Start(string code, CancellationToken cancellationToken)
     {
+        var normalized = GameCodeGenerator.Normalize(code);
         var deck = await challenges.GetDeckAsync(cancellationToken);
-        var result = await store.StartAsync(GameCodeGenerator.Normalize(code), Sub, deck, cancellationToken);
+
+        // Looked up outside the version check, which can't await; the store checks it is still
+        // the game's choice before dealing with it.
+        var lobby = await store.GetAsync(normalized, cancellationToken);
+        var powers = lobby?.PowerConfigurationId is { } configurationId
+            ? await powerConfigurations.FindAsync(configurationId, cancellationToken)
+            : null;
+
+        var result = await store.StartAsync(normalized, Sub, deck, powers, cancellationToken);
 
         if (result.Status is GameMutationStatus.Success)
         {
@@ -225,6 +281,8 @@ public class GamesController(
         game.FindPlayer(Sub)?.TeamId,
         game.DurationMinutes,
         game.HotRotationMinutes,
+        game.PowerConfigurationId,
+        game.PowerConfigurationName,
         BoardToDto(game),
         game.Players
             .Select(player => new GamePlayerDto(
@@ -243,20 +301,17 @@ public class GamesController(
             return null;
         }
 
-        var now = DateTimeOffset.UtcNow;
         var yourTeamId = game.FindPlayer(Sub)?.TeamId;
+        var yourPowers = yourTeamId is null ? null : game.FindPowers(yourTeamId);
 
         var territories = game.Teams
             .SelectMany(team => team.Territories.Select(territory => new TerritoryDto(
                 territory.BoroughId,
                 BoroughCatalogue.NameOf(territory.BoroughId),
                 team.Id,
-                team.Name,
-                territory.IsLocked)))
+                team.Name)))
             .OrderBy(t => t.Name)
             .ToList();
-
-        var counter = game.CounterWindows.FirstOrDefault(w => w.TeamId == yourTeamId);
 
         return new GameBoardDto(
             board.Active
@@ -272,39 +327,43 @@ public class GamesController(
             yourTeamId is null
                 ? []
                 : game.FindHand(yourTeamId)?.Cards.Select(ToHandCardDto).ToList() ?? [],
+            // Unplayed first: those are what the team can still use. Played ones keep the order
+            // they were kept in.
+            yourPowers?.Cards.OrderBy(c => c.IsPlayed).Select(ToPowerCardDto).ToList() ?? [],
+            yourPowers?.Offers
+                .Select(offer => new PowerOfferDto(
+                    offer.Id, offer.Reason, offer.Keep, offer.Cards.Select(ToPowerCardDto).ToList()))
+                .ToList() ?? [],
+            options.Value.MaxPowerCards,
+            game.PowerDeck?.DrawPile.Count ?? 0,
+            game.PowerDeck?.DiscardPile.Count ?? 0,
             game.Teams
                 .Select(team => new TeamScoreDto(
                     team.Id, team.Name, team.Territories.Count, team.BonusPoints, game.ScoreFor(team)))
                 .OrderByDescending(t => t.Score)
                 .ToList(),
-            counter is null
-                ? null
-                : new CounterWindowDto(
-                    counter.AgainstTeamId,
-                    game.Teams.FirstOrDefault(t => t.Id == counter.AgainstTeamId)?.Name ?? "another team",
-                    counter.ExpiresAt),
             game.EndsAt);
     }
 
-    /// <summary>
-    /// An unactivated steal is hidden — the real challenge never reaches the client — until the
-    /// team has committed to a target. A claim, or an activated steal, is always shown in full.
-    /// </summary>
-    private static HandCardDto ToHandCardDto(HandCard card)
-    {
-        var hidden = card.Type is ChallengeType.Steal && card.ActivatedAt is null;
+    private static HandCardDto ToHandCardDto(HandCard card) =>
+        new(card.Id, card.Title, card.Summary, card.FurtherDetails, card.PowerDraws);
 
-        return new HandCardDto(
-            card.Id,
-            card.Type.ToString(),
-            hidden ? "Steal challenge" : card.Title,
-            hidden ? "Pick a target to reveal it and start the clock." : card.Summary,
-            hidden ? string.Empty : card.FurtherDetails,
-            card.StealMinutes,
-            card.ActivatedAt is { } activatedAt && card.StealMinutes is { } minutes
-                ? activatedAt.AddMinutes(minutes)
-                : null);
-    }
+    private static PowerCardDto ToPowerCardDto(PowerCard card) => new(
+        card.Id,
+        card.Kind.ToString(),
+        card.Title,
+        card.Description,
+        card.PlayedAt,
+        card.Steal is { } steal
+            ? new StealDto(
+                steal.BoroughId,
+                BoroughCatalogue.NameOf(steal.BoroughId),
+                steal.Title,
+                steal.Summary,
+                steal.FurtherDetails,
+                steal.ExpiresAt,
+                steal.Outcome?.ToString())
+            : null);
 
     private ActionResult GameNotFound(string code) =>
         NotFound(new ProblemDetails
@@ -347,7 +406,7 @@ public class GamesController(
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.NotEnoughChallenges => Problem(
-            title: "Not enough challenges to deal from — you need at least five, including at least three claim and one steal",
+            title: "Not enough challenges to deal from — you need at least five claim challenges, and a steal challenge if the power deck has Steals",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.NotOnATeam => Problem(
@@ -362,28 +421,52 @@ public class GamesController(
             title: "That card can't be played on that borough",
             statusCode: StatusCodes.Status409Conflict),
 
-        GameMutationStatus.BoroughLocked => Problem(
-            title: "That borough is locked and can't be contested yet",
-            statusCode: StatusCodes.Status409Conflict),
-
         GameMutationStatus.GameNotRunning => Problem(
             title: "This game isn't running",
-            statusCode: StatusCodes.Status409Conflict),
-
-        GameMutationStatus.NoCounterWindow => Problem(
-            title: "You have no counter-attack open against that team",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.TooManyTeams => Problem(
             title: "This game already has the maximum number of teams",
             statusCode: StatusCodes.Status409Conflict),
 
-        GameMutationStatus.AlreadyActivated => Problem(
-            title: "That steal has already been activated",
+        GameMutationStatus.AlreadyPlayed => Problem(
+            title: "That power card has already been played",
             statusCode: StatusCodes.Status409Conflict),
 
-        GameMutationStatus.NotActivated => Problem(
-            title: "Pick a target to activate that steal before entering the outcome",
+        GameMutationStatus.NotPlayed => Problem(
+            title: "Play that steal at a borough before entering the outcome",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.StealSettled => Problem(
+            title: "That steal is already over — its result is in, or its time ran out",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.OfferNotFound => Problem(
+            title: "Those power cards have already been chosen from",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotInOffer => Problem(
+            title: "That card wasn't one of the ones drawn",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.TooManyKept => Problem(
+            title: "You can't keep that many of these power cards",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NoPowerConfiguration => Problem(
+            title: "Pick a power card configuration before starting",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.PowerConfigurationNotFound => Problem(
+            title: "That power card configuration no longer exists",
+            statusCode: StatusCodes.Status404NotFound),
+
+        GameMutationStatus.EmptyPowerDeck => Problem(
+            title: "That power card configuration has no cards in it",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.PowerHandFull => Problem(
+            title: "Your team is holding as many power cards as it can — play or discard one first",
             statusCode: StatusCodes.Status409Conflict),
 
         // Every retry lost the version check, which means the lobby is unusually busy rather

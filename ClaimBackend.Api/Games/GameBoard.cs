@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using ClaimBackend.Api.Challenges;
 
 namespace ClaimBackend.Api.Games;
@@ -14,71 +13,37 @@ public class ActiveBorough
 }
 
 /// <summary>
-/// A borough a team holds. A locked one is out of contention for the rest of the game — taking
-/// it by stealing, or claiming it while hot, settles it permanently.
+/// A borough a team holds. Nothing is ever settled for good — any of them can be stolen — and
+/// steals being rare is what stops boroughs bouncing back and forth.
 /// </summary>
 public class Territory
 {
     public required string BoroughId { get; init; }
-
-    public bool Locked { get; set; }
-
-    /// <summary>
-    /// Locks used to lapse after a timer. Kept only so games dealt before that changed still
-    /// read back with their locked boroughs locked.
-    /// </summary>
-    public DateTimeOffset? LockedUntil { get; set; }
-
-    /// <summary>Derived, so it isn't stored — it would be a second copy of the same fact.</summary>
-    [JsonIgnore]
-    public bool IsLocked => Locked || LockedUntil is not null;
 }
 
-/// <summary>One card in a team's hand, copied from the challenge it was dealt from.</summary>
+/// <summary>
+/// One claim challenge in a team's hand, copied from the challenge it was dealt from so a later
+/// edit to the challenge doesn't change a card already in someone's hand.
+/// </summary>
 public class HandCard
 {
     public required string Id { get; init; }
     public required string ChallengeId { get; init; }
-    public required ChallengeType Type { get; init; }
     public required string Title { get; init; }
     public required string Summary { get; init; }
     public required string FurtherDetails { get; init; }
 
     /// <summary>
-    /// Steal only, fixed at deal time so a later edit to the challenge doesn't change a card
-    /// already in someone's hand.
+    /// How many power cards completing it draws. Not required, so games dealt before power cards
+    /// existed still read back.
     /// </summary>
-    public int? StealMinutes { get; init; }
-
-    /// <summary>
-    /// Steal only. Null until the team commits to a target — the challenge stays hidden and the
-    /// clock hasn't started until then.
-    /// </summary>
-    public DateTimeOffset? ActivatedAt { get; set; }
-
-    /// <summary>The target chosen when activating. Set together with <see cref="ActivatedAt"/>.</summary>
-    public string? ActivatedBoroughId { get; set; }
+    public int PowerDraws { get; init; } = Challenge.DefaultPowerDraws;
 }
 
 public class TeamHand
 {
     public required string TeamId { get; init; }
     public required List<HandCard> Cards { get; init; }
-}
-
-/// <summary>
-/// The consolation a team gets when someone fails a steal against them: a short window in which
-/// a successful claim challenge takes a borough off the team that attacked them.
-/// </summary>
-public class CounterWindow
-{
-    /// <summary>The team that was attacked, and may now counter.</summary>
-    public required string TeamId { get; init; }
-
-    /// <summary>The team whose territory they may take one of.</summary>
-    public required string AgainstTeamId { get; init; }
-
-    public required DateTimeOffset ExpiresAt { get; init; }
 }
 
 public class GameBoard
@@ -89,8 +54,19 @@ public class GameBoard
     /// <summary>Boroughs not yet in play, drawn from when the pool is topped up.</summary>
     public required List<string> Remaining { get; init; }
 
-    /// <summary>Null only if every active borough somehow ceased to exist.</summary>
+    /// <summary>
+    /// Null when nothing on the board is eligible — every active borough has already been hot.
+    /// It comes back as soon as a fresh borough is drawn onto the board.
+    /// </summary>
     public string? HotBoroughId { get; set; }
+
+    /// <summary>
+    /// Every borough that has been hot and moved on, whether it was claimed or rotated away. None
+    /// of them can be hot again. The current one is added when it moves, not when it is chosen,
+    /// so games dealt before this existed pick up their current hot borough the first time it
+    /// rotates.
+    /// </summary>
+    public List<string> FormerHotBoroughIds { get; init; } = [];
 
     public required DateTimeOffset HotRotatesAt { get; set; }
 }

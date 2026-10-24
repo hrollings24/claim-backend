@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Amazon.DynamoDBv2;
 using ClaimBackend.Api.Challenges;
+using ClaimBackend.Api.Powers;
 using Amazon.DynamoDBv2.Model;
 using Microsoft.Extensions.Options;
 
@@ -20,15 +21,21 @@ public enum GameMutationStatus
     NotOnATeam,
     CardNotInHand,
     InvalidTarget,
-    BoroughLocked,
     GameNotRunning,
-    NoCounterWindow,
     TeamNotFound,
     DuplicateTeamName,
     TooManyTeams,
     Conflict,
-    AlreadyActivated,
-    NotActivated,
+    AlreadyPlayed,
+    NotPlayed,
+    StealSettled,
+    OfferNotFound,
+    NotInOffer,
+    TooManyKept,
+    PowerHandFull,
+    NoPowerConfiguration,
+    PowerConfigurationNotFound,
+    EmptyPowerDeck,
 }
 
 public record GameMutationResult(GameMutationStatus Status, Game? Game);
@@ -195,9 +202,10 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 CreatedAt = now,
                 Version = 1,
                 Players = [new GamePlayer { Sub = hostSub, Name = hostName, JoinedAt = now }],
+                FormerPlayers = [],
                 Teams = [],
                 Hands = [],
-                CounterWindows = [],
+                Powers = [],
             };
 
             try
@@ -235,6 +243,28 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 return GameMutationStatus.Success;
             }
 
+            // Someone who left a game under way can come back, onto the team they left; nobody
+            // else can join one.
+            if (game.FormerPlayers.FirstOrDefault(p => p.Sub == sub) is { } former)
+            {
+                game.FormerPlayers.Remove(former);
+                game.Players.Add(new GamePlayer
+                {
+                    Sub = sub,
+                    Name = name,
+                    JoinedAt = former.JoinedAt,
+                    TeamId = former.TeamId,
+                });
+
+                // If everyone had left, the host role left with the last of them.
+                if (game.FindPlayer(game.HostSub) is null)
+                {
+                    game.HostSub = sub;
+                }
+
+                return GameMutationStatus.Success;
+            }
+
             if (game.Status is not GameStatus.Lobby)
             {
                 return GameMutationStatus.AlreadyStarted;
@@ -260,6 +290,14 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
 
             game.Players.Remove(player);
 
+            // In the lobby a player who leaves can simply join again. Once the game is under way
+            // nobody new can, so they are remembered, team and all, for when they come back.
+            if (game.Status is not GameStatus.Lobby)
+            {
+                game.FormerPlayers.RemoveAll(p => p.Sub == sub);
+                game.FormerPlayers.Add(player);
+            }
+
             // If the host walks out, hand the game to whoever is next in line, otherwise the
             // remaining players are stuck in a lobby nobody can start.
             if (game.IsHost(sub) && game.Players.Count > 0)
@@ -270,8 +308,17 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             return GameMutationStatus.Success;
         }, cancellationToken);
 
+    /// <summary>
+    /// <paramref name="powers"/> is the configuration the caller looked up for the game; it is
+    /// checked against the game's choice inside the version check, in case the host changed it
+    /// in between.
+    /// </summary>
     public Task<GameMutationResult> StartAsync(
-        string code, string sub, IReadOnlyList<Challenge> deck, CancellationToken cancellationToken) =>
+        string code,
+        string sub,
+        IReadOnlyList<Challenge> deck,
+        PowerConfiguration? powers,
+        CancellationToken cancellationToken) =>
         MutateAsync(code, game =>
         {
             if (!game.IsHost(sub))
@@ -286,101 +333,108 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 return GameMutationStatus.AlreadyStarted;
             }
 
+            if (game.PowerConfigurationId is null)
+            {
+                return GameMutationStatus.NoPowerConfiguration;
+            }
+
+            if (powers is null || powers.Id != game.PowerConfigurationId)
+            {
+                return GameMutationStatus.PowerConfigurationNotFound;
+            }
+
+            game.PowerConfigurationName = powers.Name;
+
             // Dealing the board and the hands is the engine's job — starting is where a lobby
             // stops being a list of names and becomes a game.
-            return engine.Start(game, deck, DateTimeOffset.UtcNow);
+            return engine.Start(game, deck, powers, DateTimeOffset.UtcNow);
         }, cancellationToken);
 
     /// <summary>
-    /// Plays a card from the caller's team hand at a borough, reporting the outcome of the
-    /// challenge. The engine decides what that means — claim, steal, or a counter-attack.
+    /// Plays a claim challenge from the caller's team hand at a borough, reporting whether it
+    /// came off.
     /// </summary>
-    public async Task<(GameMutationResult Result, PlayResult Play)> PlayAsync(
+    public Task<(GameMutationResult Result, PlayResult Play)> PlayAsync(
         string code,
         string sub,
         string cardId,
         string boroughId,
         bool succeeded,
         IReadOnlyList<Challenge> deck,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) =>
+            engine.Play(game, teamId, cardId, boroughId, succeeded, deck, DateTimeOffset.UtcNow),
+            cancellationToken);
+
+    /// <summary>Keeps some, or none, of a power-card offer; the rest are discarded.</summary>
+    public Task<GameMutationResult> KeepPowersAsync(
+        string code, string sub, string offerId, IReadOnlyCollection<string> cardIds, CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) => engine.KeepPowers(game, teamId, offerId, cardIds), cancellationToken);
+
+    public Task<GameMutationResult> DiscardPowerAsync(
+        string code, string sub, string cardId, CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) => engine.DiscardPower(game, teamId, cardId), cancellationToken);
+
+    /// <summary>
+    /// Plays a power card. For a steal this commits the target, reveals the challenge and starts
+    /// the countdown.
+    /// </summary>
+    public Task<GameMutationResult> PlayPowerAsync(
+        string code,
+        string sub,
+        string cardId,
+        string? boroughId,
+        IReadOnlyList<Challenge> deck,
+        CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) =>
+            engine.PlayPower(game, teamId, cardId, boroughId, deck, DateTimeOffset.UtcNow),
+            cancellationToken);
+
+    /// <summary>Reports the outcome of a steal already played against its target.</summary>
+    public Task<(GameMutationResult Result, PlayResult Play)> ResolveStealAsync(
+        string code, string sub, string cardId, bool succeeded, CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) => engine.ResolveSteal(game, teamId, cardId, succeeded), cancellationToken);
+
+    private Task<GameMutationResult> MutateAsTeamAsync(
+        string code, string sub, Func<Game, string, GameMutationStatus> mutate, CancellationToken cancellationToken) =>
+        MutateAsync(code, game => TeamOf(game, sub, out var teamId) is { } failure ? failure : mutate(game, teamId!), cancellationToken);
+
+    /// <summary>
+    /// For moves that report what they did. A retry re-runs the move, so the result always
+    /// reflects the attempt that stuck.
+    /// </summary>
+    private async Task<(GameMutationResult Result, PlayResult Play)> MutateAsTeamAsync(
+        string code, string sub, Func<Game, string, PlayResult> mutate, CancellationToken cancellationToken)
     {
         var play = new PlayResult(GameMutationStatus.Conflict);
 
-        var result = await MutateAsync(code, game =>
+        var result = await MutateAsTeamAsync(code, sub, (game, teamId) =>
         {
-            var player = game.FindPlayer(sub);
-            if (player is null)
-            {
-                return GameMutationStatus.NotInGame;
-            }
-
-            if (player.TeamId is null)
-            {
-                return GameMutationStatus.NotOnATeam;
-            }
-
-            // A retry re-runs this, so the result always reflects the attempt that stuck.
-            play = engine.Play(
-                game, player.TeamId, cardId, boroughId, succeeded, deck, DateTimeOffset.UtcNow);
-
+            play = mutate(game, teamId);
             return play.Status;
         }, cancellationToken);
 
         return (result, play);
     }
 
-    /// <summary>
-    /// Commits a steal card to a target — the countdown starts here, and the challenge is
-    /// revealed to the acting team from this moment on.
-    /// </summary>
-    public Task<GameMutationResult> ActivateStealAsync(
-        string code, string sub, string cardId, string boroughId, CancellationToken cancellationToken) =>
-        MutateAsync(code, game =>
-        {
-            var player = game.FindPlayer(sub);
-            if (player is null)
-            {
-                return GameMutationStatus.NotInGame;
-            }
-
-            if (player.TeamId is null)
-            {
-                return GameMutationStatus.NotOnATeam;
-            }
-
-            return engine.ActivateSteal(game, player.TeamId, cardId, boroughId, DateTimeOffset.UtcNow);
-        }, cancellationToken);
-
-    /// <summary>Reports the outcome of a steal already activated against its target.</summary>
-    public async Task<(GameMutationResult Result, PlayResult Play)> ResolveStealAsync(
-        string code,
-        string sub,
-        string cardId,
-        bool succeeded,
-        IReadOnlyList<Challenge> deck,
-        CancellationToken cancellationToken)
+    /// <summary>Null when the caller can act for a team, otherwise why not.</summary>
+    private static GameMutationStatus? TeamOf(Game game, string sub, out string? teamId)
     {
-        var play = new PlayResult(GameMutationStatus.Conflict);
+        teamId = null;
 
-        var result = await MutateAsync(code, game =>
+        var player = game.FindPlayer(sub);
+        if (player is null)
         {
-            var player = game.FindPlayer(sub);
-            if (player is null)
-            {
-                return GameMutationStatus.NotInGame;
-            }
+            return GameMutationStatus.NotInGame;
+        }
 
-            if (player.TeamId is null)
-            {
-                return GameMutationStatus.NotOnATeam;
-            }
+        if (player.TeamId is null)
+        {
+            return GameMutationStatus.NotOnATeam;
+        }
 
-            play = engine.ResolveSteal(game, player.TeamId, cardId, succeeded, deck, DateTimeOffset.UtcNow);
-
-            return play.Status;
-        }, cancellationToken);
-
-        return (result, play);
+        teamId = player.TeamId;
+        return null;
     }
 
     /// <summary>
@@ -402,6 +456,26 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             }
 
             game.DurationMinutes = durationMinutes;
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>Which power deck the game is dealt with is a setting, so the host picks it, in the lobby.</summary>
+    public Task<GameMutationResult> SetPowerConfigurationAsync(
+        string code, string sub, PowerConfiguration configuration, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            if (!game.IsHost(sub))
+            {
+                return GameMutationStatus.NotHost;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            game.PowerConfigurationId = configuration.Id;
+            game.PowerConfigurationName = configuration.Name;
             return GameMutationStatus.Success;
         }, cancellationToken);
 
@@ -555,7 +629,9 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
 
     /// <summary>
     /// Writes the game back only if nobody else has written since it was read. An emptied game
-    /// is deleted rather than stored, since there is no lobby left to show anyone.
+    /// is deleted rather than stored, since there is no lobby left to show anyone — unless
+    /// someone who left mid-game could still come back to it, in which case TTL clears it once
+    /// nobody does.
     /// </summary>
     private async Task WriteAsync(Game game, long expectedVersion, CancellationToken cancellationToken)
     {
@@ -566,7 +642,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             [":expectedVersion"] = Number(expectedVersion),
         };
 
-        if (game.Players.Count == 0)
+        if (game.Players.Count == 0 && game.FormerPlayers.Count == 0)
         {
             await dynamo.DeleteItemAsync(
                 new DeleteItemRequest
@@ -615,30 +691,17 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         // set to last as long as a day.
         ["ExpiresAt"] = Number(
             DateTimeOffset.UtcNow.AddHours(_options.TimeToLiveHours).ToUnixTimeSeconds()),
-        ["Players"] = new AttributeValue
-        {
-            L = game.Players
-                .Select(player => new AttributeValue
-                {
-                    M = new Dictionary<string, AttributeValue>
-                    {
-                        ["Sub"] = new AttributeValue(player.Sub),
-                        ["Name"] = new AttributeValue(player.Name),
-                        ["JoinedAt"] = new AttributeValue(
-                            player.JoinedAt.ToString("O", CultureInfo.InvariantCulture)),
-                        ["TeamId"] = player.TeamId is null
-                            ? new AttributeValue { NULL = true }
-                            : new AttributeValue(player.TeamId),
-                    },
-                })
-                .ToList(),
-        },
+        ["Players"] = PlayersToAttribute(game.Players),
+        ["FormerPlayers"] = PlayersToAttribute(game.FormerPlayers),
         // Board, hands and territories nest several levels deep and are never queried into —
         // only ever read back whole — so they are stored as JSON rather than as five levels of
         // nested DynamoDB maps and lists.
         ["Board"] = Json(game.Board),
         ["Hands"] = Json(game.Hands),
-        ["CounterWindows"] = Json(game.CounterWindows),
+        ["Powers"] = Json(game.Powers),
+        ["PowerDeck"] = Json(game.PowerDeck),
+        ["PowerConfigurationId"] = OptionalAttribute(game.PowerConfigurationId),
+        ["PowerConfigurationName"] = OptionalAttribute(game.PowerConfigurationName),
         ["StartedAt"] = OptionalTimestamp(game.StartedAt),
         ["EndsAt"] = OptionalTimestamp(game.EndsAt),
         ["EndingSoonNotifiedAt"] = OptionalTimestamp(game.EndingSoonNotifiedAt),
@@ -674,15 +737,11 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         HotRotationMinutes = item.TryGetValue("HotRotationMinutes", out var hotRotation)
             ? int.Parse(hotRotation.N, CultureInfo.InvariantCulture)
             : 90,
-        Players = item["Players"].L
-            .Select(player => new GamePlayer
-            {
-                Sub = player.M["Sub"].S,
-                Name = player.M["Name"].S,
-                JoinedAt = DateTimeOffset.Parse(player.M["JoinedAt"].S, CultureInfo.InvariantCulture),
-                TeamId = OptionalString(player.M, "TeamId"),
-            })
-            .ToList(),
+        Players = PlayersFromAttribute(item["Players"]),
+        // Games written before players could come back have no FormerPlayers attribute at all.
+        FormerPlayers = item.TryGetValue("FormerPlayers", out var formerPlayers)
+            ? PlayersFromAttribute(formerPlayers)
+            : [],
         // Games created before teams existed have no Teams attribute at all.
         Teams = item.TryGetValue("Teams", out var teams)
             ? teams.L
@@ -699,11 +758,44 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             : [],
         Board = FromJson<GameBoard>(item, "Board"),
         Hands = FromJson<List<TeamHand>>(item, "Hands") ?? [],
-        CounterWindows = FromJson<List<CounterWindow>>(item, "CounterWindows") ?? [],
+        Powers = FromJson<List<TeamPowers>>(item, "Powers") ?? [],
+        PowerDeck = FromJson<PowerDeck>(item, "PowerDeck"),
+        PowerConfigurationId = OptionalString(item, "PowerConfigurationId"),
+        PowerConfigurationName = OptionalString(item, "PowerConfigurationName"),
         StartedAt = OptionalDate(item, "StartedAt"),
         EndsAt = OptionalDate(item, "EndsAt"),
         EndingSoonNotifiedAt = OptionalDate(item, "EndingSoonNotifiedAt"),
     };
+
+    private static AttributeValue PlayersToAttribute(IEnumerable<GamePlayer> players) => new()
+    {
+        L = players
+            .Select(player => new AttributeValue
+            {
+                M = new Dictionary<string, AttributeValue>
+                {
+                    ["Sub"] = new AttributeValue(player.Sub),
+                    ["Name"] = new AttributeValue(player.Name),
+                    ["JoinedAt"] = new AttributeValue(
+                        player.JoinedAt.ToString("O", CultureInfo.InvariantCulture)),
+                    ["TeamId"] = player.TeamId is null
+                        ? new AttributeValue { NULL = true }
+                        : new AttributeValue(player.TeamId),
+                },
+            })
+            .ToList(),
+    };
+
+    private static List<GamePlayer> PlayersFromAttribute(AttributeValue players) =>
+        players.L
+            .Select(player => new GamePlayer
+            {
+                Sub = player.M["Sub"].S,
+                Name = player.M["Name"].S,
+                JoinedAt = DateTimeOffset.Parse(player.M["JoinedAt"].S, CultureInfo.InvariantCulture),
+                TeamId = OptionalString(player.M, "TeamId"),
+            })
+            .ToList();
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -727,6 +819,9 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         item.TryGetValue(name, out var value) && value.S is { } text
             ? DateTimeOffset.Parse(text, CultureInfo.InvariantCulture)
             : null;
+
+    private static AttributeValue OptionalAttribute(string? value) =>
+        value is null ? new AttributeValue { NULL = true } : new AttributeValue(value);
 
     /// <summary>Reads an attribute that may be absent, or present and explicitly null.</summary>
     private static string? OptionalString(Dictionary<string, AttributeValue> item, string name) =>

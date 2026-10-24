@@ -17,6 +17,8 @@ public record GameDto(
     string? YourTeamId,
     int DurationMinutes,
     int HotRotationMinutes,
+    string? PowerConfigurationId,
+    string? PowerConfigurationName,
     GameBoardDto? Board,
     IReadOnlyList<GamePlayerDto> Players,
     IReadOnlyList<GameTeamDto> Teams);
@@ -39,48 +41,74 @@ public record CreateTeamRequest(
 public record SetDurationRequest(
     [Range(1, 24 * 60)] int DurationMinutes);
 
+public record SetPowerConfigurationRequest([Required] string ConfigurationId);
+
 /// <summary>How long the hot borough stands before moving on its own.</summary>
 public record SetHotRotationRequest(
     [Range(1, 24 * 60)] int HotRotationMinutes);
 
 public record ActiveBoroughDto(string Id, string Name, string Zone, bool IsHot);
 
-/// <summary>A locked borough is settled for the rest of the game, so there is no time to show.</summary>
-public record TerritoryDto(
-    string Id, string Name, string TeamId, string TeamName, bool IsLocked);
+public record TerritoryDto(string Id, string Name, string TeamId, string TeamName);
 
-/// <summary>
-/// An unactivated steal's <paramref name="Title"/>/<paramref name="Summary"/>/<paramref name="FurtherDetails"/>
-/// are placeholder text, not the real challenge — the API never sends the real ones before the
-/// team commits to a target. <paramref name="ExpiresAt"/> is null until then, too; once it is
-/// set, the challenge is real and the countdown is running.
-/// </summary>
+/// <param name="PowerDraws">How many power cards completing it draws; doubled on the hot borough.</param>
 public record HandCardDto(
     string Id,
-    string Type,
     string Title,
     string Summary,
     string FurtherDetails,
-    int? StealMinutes,
-    DateTimeOffset? ExpiresAt);
+    int PowerDraws);
 
 public record TeamScoreDto(string TeamId, string Name, int Territories, int BonusPoints, int Score);
 
-/// <summary>Only ever the caller's own window — you can't see who else is about to hit back.</summary>
-public record CounterWindowDto(string AgainstTeamId, string AgainstTeamName, DateTimeOffset ExpiresAt);
+/// <summary>
+/// The challenge a played Steal revealed, and how it stands. <paramref name="Outcome"/> is null
+/// while the clock is running, then Succeeded, Failed or TimedOut.
+/// </summary>
+public record StealDto(
+    string BoroughId,
+    string BoroughName,
+    string Title,
+    string Summary,
+    string FurtherDetails,
+    DateTimeOffset ExpiresAt,
+    string? Outcome);
+
+/// <summary>
+/// A power card. Played ones stay in the list, marked by <paramref name="PlayedAt"/>, so the team
+/// can see what they have used.
+/// </summary>
+public record PowerCardDto(
+    string Id,
+    string Kind,
+    string Title,
+    string Description,
+    DateTimeOffset? PlayedAt,
+    StealDto? Steal);
+
+/// <summary>Cards drawn and waiting for the team to keep up to <paramref name="Keep"/> of them.</summary>
+public record PowerOfferDto(string Id, string Reason, int Keep, IReadOnlyList<PowerCardDto> Cards);
 
 /// <summary>
 /// Everything a player needs to decide their next move: what's on offer, who holds what, the
-/// cards in their own hand, and the clock.
+/// cards in their own hand, their power cards, and the clock. Hand and power cards are only ever
+/// the caller's own team's.
 /// </summary>
+/// <param name="MaxPowerCards">How many unplayed power cards a team may hold at once.</param>
+/// <param name="PowerDeckCount">Cards left to draw before the discard pile is shuffled back in.</param>
+/// <param name="PowerDiscardCount">Cards waiting on the discard pile.</param>
 public record GameBoardDto(
     IReadOnlyList<ActiveBoroughDto> Active,
     string? HotBoroughId,
     DateTimeOffset HotRotatesAt,
     IReadOnlyList<TerritoryDto> Territories,
     IReadOnlyList<HandCardDto> YourHand,
+    IReadOnlyList<PowerCardDto> YourPowers,
+    IReadOnlyList<PowerOfferDto> YourPowerOffers,
+    int MaxPowerCards,
+    int PowerDeckCount,
+    int PowerDiscardCount,
     IReadOnlyList<TeamScoreDto> Scores,
-    CounterWindowDto? YourCounterWindow,
     DateTimeOffset? EndsAt);
 
 public record PlayCardRequest(
@@ -88,10 +116,10 @@ public record PlayCardRequest(
     [Required] string BoroughId,
     bool Succeeded);
 
-public record ActivateStealRequest(
-    [Required] string CardId,
-    [Required] string BoroughId);
+/// <summary>The ids of the offered cards to keep. Empty turns the whole offer down.</summary>
+public record KeepPowersRequest([Required] IReadOnlyList<string> CardIds);
 
-public record ResolveStealRequest(
-    [Required] string CardId,
-    bool Succeeded);
+/// <summary><paramref name="BoroughId"/> is the target, and is required for a Steal only.</summary>
+public record PlayPowerRequest(string? BoroughId);
+
+public record ResolveStealRequest(bool Succeeded);

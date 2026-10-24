@@ -1,5 +1,6 @@
 using ClaimBackend.Api.Boroughs;
 using ClaimBackend.Api.Challenges;
+using ClaimBackend.Api.Powers;
 using Microsoft.Extensions.Options;
 
 namespace ClaimBackend.Api.Games;
@@ -12,16 +13,15 @@ public enum PlayEffect
     HotBoroughClaimed,
     BoroughStolen,
     StealFailed,
-    CounterSucceeded,
 }
 
 /// <summary>
 /// <paramref name="CounterpartTeamId"/> is the other team involved — the one robbed, or the one
-/// handed a counter window. Carried out of the engine because by the time the caller sees the
-/// game the move has already been applied, and who it happened to is no longer recoverable.
-/// <paramref name="BoroughId"/> is set only by <see cref="GameEngine.ResolveSteal"/>, whose caller
-/// has no borough of its own to notify about — a steal's target was chosen back when it was
-/// activated, not on the request that resolves it.
+/// that survived a steal and drew for it. Carried out of the engine because by the time the
+/// caller sees the game the move has already been applied, and who it happened to is no longer
+/// recoverable. <paramref name="BoroughId"/> is set only by <see cref="GameEngine.ResolveSteal"/>,
+/// whose caller has no borough of its own to notify about — a steal's target was chosen when the
+/// card was played, not on the request that resolves it.
 /// </summary>
 public record PlayResult(
     GameMutationStatus Status,
@@ -34,6 +34,10 @@ public record PlayResult(
 /// check, so a play that races another team's play is re-read and re-applied rather than
 /// overwriting it.
 ///
+/// The hand holds claim challenges only. Completing one claims the borough and draws power
+/// cards, of which the team keeps one. Steal is one of those power cards: playing it at another
+/// team's borough reveals a steal challenge and starts its clock.
+///
 /// Timers are deadlines rather than scheduled work: nothing runs between requests, and
 /// <see cref="Advance"/> brings the world up to date whenever the game is looked at. That suits
 /// a Lambda with no scheduler, and costs nothing while a game sits idle.
@@ -42,19 +46,33 @@ public class GameEngine(IOptions<GamesOptions> options)
 {
     private readonly GamesOptions _options = options.Value;
 
-    public GameMutationStatus Start(Game game, IReadOnlyList<Challenge> deck, DateTimeOffset now)
+    public GameMutationStatus Start(
+        Game game, IReadOnlyList<Challenge> deck, PowerConfiguration powers, DateTimeOffset now)
     {
-        // Stealing is most of the game, and there is nobody to steal from with one team.
+        // There is nobody to steal from with one team.
         if (game.Teams.Count < 2)
         {
             return GameMutationStatus.NotEnoughTeams;
         }
 
-        if (deck.Count < _options.HandSize
-            || deck.Count(c => c.Type is ChallengeType.Claim) < _options.MinClaimCardsInHand
-            || !deck.Any(c => c.Type is ChallengeType.Steal))
+        // Hands are dealt from claim challenges; steal challenges are what a Steal card reveals,
+        // so with Steals in the power deck and none to reveal, one could be drawn and never played.
+        var claims = ClaimsIn(deck);
+        var needsSteals = PowerCatalogue.All.Any(p => p.Kind is PowerKind.Steal && powers.CountOf(p.Id) > 0);
+        if (claims.Count < _options.HandSize || (needsSteals && !deck.Any(c => c.Type is ChallengeType.Steal)))
         {
             return GameMutationStatus.NotEnoughChallenges;
+        }
+
+        var powerPile = PowerCatalogue.All
+            .SelectMany(p => Enumerable.Repeat(p.Id, powers.CountOf(p.Id)))
+            .OrderBy(_ => Random.Shared.Next())
+            .ToList();
+
+        // Possible only if the catalogue has dropped every card the configuration names.
+        if (powerPile.Count == 0)
+        {
+            return GameMutationStatus.EmptyPowerDeck;
         }
 
         var pool = BoroughCatalogue.All.Select(b => b.Id).OrderBy(_ => Random.Shared.Next()).ToList();
@@ -69,15 +87,14 @@ public class GameEngine(IOptions<GamesOptions> options)
         };
 
         game.Hands.Clear();
+        game.Powers.Clear();
         foreach (var team in game.Teams)
         {
-            game.Hands.Add(new TeamHand
-            {
-                TeamId = team.Id,
-                Cards = DealHand(deck, _options.HandSize, _options.MinClaimCardsInHand),
-            });
+            game.Hands.Add(new TeamHand { TeamId = team.Id, Cards = DealHand(claims, _options.HandSize) });
+            game.Powers.Add(new TeamPowers { TeamId = team.Id, Cards = [], Offers = [] });
         }
 
+        game.PowerDeck = new PowerDeck { DrawPile = powerPile, DiscardPile = [] };
         game.StartedAt = now;
         game.EndsAt = now.AddMinutes(game.DurationMinutes);
         game.Status = GameStatus.InProgress;
@@ -86,11 +103,11 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>
-    /// Brings deadlines up to date: locks lapse, counter windows close, the hot borough moves on,
+    /// Brings deadlines up to date: steals whose clock ran out fail, the hot borough moves on,
     /// and the game ends when its time runs out. Safe to call repeatedly. Returns whether
     /// anything actually moved, because the caller has to persist it if so — rotating the hot
-    /// borough is a random choice, and re-rolling it on every read would land somewhere new each
-    /// time anyone looked.
+    /// borough and drawing power cards are random, and re-rolling them on every read would land
+    /// somewhere new each time anyone looked.
     /// </summary>
     public bool Advance(Game game, DateTimeOffset now)
     {
@@ -102,20 +119,25 @@ public class GameEngine(IOptions<GamesOptions> options)
         if (game.EndsAt is { } endsAt && now >= endsAt)
         {
             // Freeze everything as it stands; the scores are whatever they were at the whistle.
+            // A steal still running at the end simply never happened.
             game.Status = GameStatus.Finished;
             return true;
         }
 
-        // Locks are permanent, so the only deadlines left to bring forward are the counter
-        // window and the hot borough.
-        var changed = game.CounterWindows.RemoveAll(window => window.ExpiresAt <= now) > 0;
+        var changed = TimeOutSteals(game, now);
 
         // The hot borough must always be one of the active — unclaimed by definition — so it also
-        // moves the moment the borough it was sitting on is claimed out from under it.
+        // moves the moment the borough it was sitting on is claimed out from under it. With no hot
+        // borough at all, because nothing on the board was eligible, it waits for somewhere new
+        // to go rather than re-rolling to nothing, and reporting a change, on every read.
         var hotStillActive = board.HotBoroughId is { } hot
             && board.Active.Any(a => a.BoroughId == hot);
 
-        if (!hotStillActive || now >= board.HotRotatesAt)
+        var rotate = hotStillActive
+            ? now >= board.HotRotatesAt
+            : board.HotBoroughId is not null || HotCandidates(board).Count > 0;
+
+        if (rotate)
         {
             RotateHot(board, game.HotRotationMinutes, now);
             changed = true;
@@ -124,6 +146,11 @@ public class GameEngine(IOptions<GamesOptions> options)
         return changed;
     }
 
+    /// <summary>
+    /// Plays a claim challenge from the hand at an active borough. A card is spent whether or not
+    /// the challenge came off, and the hand is topped back up; only a success claims the borough
+    /// and draws power cards.
+    /// </summary>
     public PlayResult Play(
         Game game,
         string teamId,
@@ -138,7 +165,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             return new PlayResult(GameMutationStatus.GameNotRunning);
         }
 
-        var team = game.Teams.FirstOrDefault(t => t.Id == teamId);
+        var team = game.FindTeam(teamId);
         var hand = game.FindHand(teamId);
         if (team is null || hand is null)
         {
@@ -151,144 +178,239 @@ public class GameEngine(IOptions<GamesOptions> options)
             return new PlayResult(GameMutationStatus.CardNotInHand);
         }
 
-        // A steal is hidden until activated and runs on its own timer, so it can only be resolved
-        // through ActivateSteal/ResolveSteal — never played outright the way a claim is.
-        if (card.Type is not ChallengeType.Claim)
+        var active = board.Active.FirstOrDefault(a => a.BoroughId == boroughId);
+        if (active is null)
         {
             return new PlayResult(GameMutationStatus.InvalidTarget);
         }
 
-        var result = PlayClaim(game, board, team, boroughId, succeeded, now);
+        var effect = succeeded ? Claim(game, board, team, card, active, now) : PlayEffect.Nothing;
 
-        // A card is spent whether or not the challenge came off, and the hand is topped back up.
-        if (result.Status is GameMutationStatus.Success)
+        // Chosen before the played card leaves the hand, so the challenge just attempted isn't
+        // handed straight back.
+        var replacement = DrawReplacement(ClaimsIn(deck), hand);
+        hand.Cards.Remove(card);
+        if (replacement is not null)
         {
-            // Chosen before the played card leaves the hand, so the challenge just attempted
-            // isn't handed straight back.
-            var replacement = DrawReplacement(deck, hand, card, _options.MinClaimCardsInHand);
-            hand.Cards.Remove(card);
             hand.Cards.Add(replacement);
         }
 
-        return result;
+        return new PlayResult(GameMutationStatus.Success, effect);
     }
 
     /// <summary>
-    /// Commits a steal to a target: the countdown starts here, and the challenge is revealed to
-    /// the team from this moment on. There is no way back from this short of resolving it.
+    /// Takes some or none of an offer's cards into the team's power cards; the rest are
+    /// discarded and the offer is gone. Keeping none is how a team at the limit turns one down.
     /// </summary>
-    public GameMutationStatus ActivateSteal(
-        Game game, string teamId, string cardId, string boroughId, DateTimeOffset now)
+    public GameMutationStatus KeepPowers(
+        Game game, string teamId, string offerId, IReadOnlyCollection<string> cardIds)
     {
         if (game.Status is not GameStatus.InProgress)
         {
             return GameMutationStatus.GameNotRunning;
         }
 
-        var hand = game.FindHand(teamId);
-        var card = hand?.Cards.FirstOrDefault(c => c.Id == cardId);
-        if (hand is null || card is null)
+        if (game.FindPowers(teamId) is not { } powers)
         {
-            return GameMutationStatus.CardNotInHand;
+            return GameMutationStatus.NotOnATeam;
         }
 
-        if (card.Type is not ChallengeType.Steal)
+        var offer = powers.Offers.FirstOrDefault(o => o.Id == offerId);
+        if (offer is null)
         {
-            return GameMutationStatus.InvalidTarget;
+            return GameMutationStatus.OfferNotFound;
         }
 
-        if (card.ActivatedAt is not null)
+        var kept = cardIds.Distinct().Select(id => offer.Cards.FirstOrDefault(c => c.Id == id)).ToList();
+        if (kept.Any(c => c is null))
         {
-            return GameMutationStatus.AlreadyActivated;
+            return GameMutationStatus.NotInOffer;
         }
 
-        var holder = game.FindTeamHolding(boroughId);
-        if (holder is null || holder.Id == teamId)
+        if (kept.Count > offer.Keep)
         {
-            return GameMutationStatus.InvalidTarget;
+            return GameMutationStatus.TooManyKept;
         }
 
-        if (holder.FindTerritory(boroughId)!.IsLocked)
+        if (powers.UnplayedCount + kept.Count > _options.MaxPowerCards)
         {
-            return GameMutationStatus.BoroughLocked;
+            return GameMutationStatus.PowerHandFull;
         }
 
-        card.ActivatedAt = now;
-        card.ActivatedBoroughId = boroughId;
+        powers.Cards.AddRange(kept.OfType<PowerCard>());
+        powers.Offers.Remove(offer);
+        Discard(game, offer.Cards.Except(kept.OfType<PowerCard>()));
 
         return GameMutationStatus.Success;
     }
 
+    /// <summary>Throws away an unplayed power card, to make room under the limit.</summary>
+    public GameMutationStatus DiscardPower(Game game, string teamId, string cardId)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return GameMutationStatus.GameNotRunning;
+        }
+
+        var powers = game.FindPowers(teamId);
+        var card = powers?.Cards.FirstOrDefault(c => c.Id == cardId);
+        if (powers is null || card is null)
+        {
+            return GameMutationStatus.CardNotInHand;
+        }
+
+        // A played card is the record of what happened, not something still held.
+        if (card.IsPlayed)
+        {
+            return GameMutationStatus.AlreadyPlayed;
+        }
+
+        powers.Cards.Remove(card);
+        Discard(game, [card]);
+        return GameMutationStatus.Success;
+    }
+
     /// <summary>
-    /// Reports the outcome of an already-activated steal. Spent either way — a card is spent
-    /// whether or not the challenge came off, same as any other — and also if the target stopped
-    /// being a legal one while the clock ran (claimed, stolen, or locked by someone else in the
-    /// meantime): there is nothing left to do with it but let it go.
+    /// Plays a power card. A curse is only marked as played — the team tells its target over the
+    /// group chat. A steal needs a borough another team holds: the target is committed first,
+    /// then a steal challenge is revealed and its countdown starts. Neither can be taken back.
     /// </summary>
-    public PlayResult ResolveSteal(
-        Game game, string teamId, string cardId, bool succeeded, IReadOnlyList<Challenge> deck, DateTimeOffset now)
+    public GameMutationStatus PlayPower(
+        Game game, string teamId, string cardId, string? boroughId, IReadOnlyList<Challenge> deck, DateTimeOffset now)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return GameMutationStatus.GameNotRunning;
+        }
+
+        var card = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == cardId);
+        if (card is null)
+        {
+            return GameMutationStatus.CardNotInHand;
+        }
+
+        if (card.IsPlayed)
+        {
+            return GameMutationStatus.AlreadyPlayed;
+        }
+
+        if (card.Kind is PowerKind.Steal)
+        {
+            var holder = boroughId is null ? null : game.FindTeamHolding(boroughId);
+            if (holder is null || holder.Id == teamId)
+            {
+                return GameMutationStatus.InvalidTarget;
+            }
+
+            var steals = deck.Where(c => c.Type is ChallengeType.Steal).ToList();
+            if (steals.Count == 0)
+            {
+                return GameMutationStatus.NotEnoughChallenges;
+            }
+
+            var challenge = steals[Random.Shared.Next(steals.Count)];
+            card.Steal = new StealAttempt
+            {
+                BoroughId = boroughId!,
+                ChallengeId = challenge.Id,
+                Title = challenge.Title,
+                Summary = challenge.Summary,
+                FurtherDetails = challenge.FurtherDetails,
+                ExpiresAt = now.AddMinutes(challenge.EffectiveStealMinutes),
+                PowerDraws = challenge.EffectivePowerDraws,
+            };
+        }
+
+        card.PlayedAt = now;
+        return GameMutationStatus.Success;
+    }
+
+    /// <summary>
+    /// Reports how a running steal went. It has to arrive before the clock runs out — after that
+    /// <see cref="Advance"/> has already failed it. A success takes the borough from whoever
+    /// holds it now; a failure costs the card, and the team that was targeted draws power cards
+    /// for surviving it.
+    /// </summary>
+    public PlayResult ResolveSteal(Game game, string teamId, string cardId, bool succeeded)
     {
         if (game.Status is not GameStatus.InProgress)
         {
             return new PlayResult(GameMutationStatus.GameNotRunning);
         }
 
-        var team = game.Teams.FirstOrDefault(t => t.Id == teamId);
-        var hand = game.FindHand(teamId);
-        var card = hand?.Cards.FirstOrDefault(c => c.Id == cardId);
-        if (team is null || hand is null || card is null)
+        var team = game.FindTeam(teamId);
+        var card = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == cardId);
+        if (team is null || card is null)
         {
             return new PlayResult(GameMutationStatus.CardNotInHand);
         }
 
-        if (card.ActivatedAt is null || card.ActivatedBoroughId is not { } boroughId)
+        if (card.Kind is not PowerKind.Steal)
         {
-            return new PlayResult(GameMutationStatus.NotActivated);
+            return new PlayResult(GameMutationStatus.InvalidTarget);
         }
 
-        var result = PlaySteal(game, team, boroughId, succeeded, now);
-        if (result.Status is not (GameMutationStatus.Success or GameMutationStatus.InvalidTarget or GameMutationStatus.BoroughLocked))
+        if (card.Steal is not { } steal)
         {
-            return result;
+            return new PlayResult(GameMutationStatus.NotPlayed);
         }
 
-        var replacement = DrawReplacement(deck, hand, card, _options.MinClaimCardsInHand);
-        hand.Cards.Remove(card);
-        hand.Cards.Add(replacement);
-
-        return result.Status is GameMutationStatus.Success
-            ? result with { BoroughId = boroughId }
-            : new PlayResult(GameMutationStatus.Success, BoroughId: boroughId);
-    }
-
-    private PlayResult PlayClaim(
-        Game game, GameBoard board, GameTeam team, string boroughId, bool succeeded, DateTimeOffset now)
-    {
-        var active = board.Active.FirstOrDefault(a => a.BoroughId == boroughId);
-
-        if (active is null)
+        if (steal.Outcome is not null)
         {
-            // Not on the board — the only other legal use of a claim card is hitting back at the
-            // team that just failed a steal against you.
-            return PlayCounter(game, team, boroughId, succeeded, now);
+            return new PlayResult(GameMutationStatus.StealSettled);
         }
+
+        var holder = game.FindTeamHolding(steal.BoroughId);
 
         if (!succeeded)
         {
-            // A failed claim costs the card and nothing else.
-            return new PlayResult(GameMutationStatus.Success);
+            steal.Outcome = StealOutcome.Failed;
+            var defender = OfferToDefender(game, teamId, steal);
+
+            return new PlayResult(
+                GameMutationStatus.Success,
+                defender is null ? PlayEffect.Nothing : PlayEffect.StealFailed,
+                defender,
+                steal.BoroughId);
         }
 
-        var wasHot = board.HotBoroughId == boroughId;
-        var territory = new Territory { BoroughId = boroughId };
+        steal.Outcome = StealOutcome.Succeeded;
 
+        // Someone else may have stolen it while the clock ran — the steal is from whoever holds
+        // it now. If that is already the stealing team, there is nothing left to take.
+        if (holder is null || holder.Id == teamId)
+        {
+            return new PlayResult(GameMutationStatus.Success, BoroughId: steal.BoroughId);
+        }
+
+        var territory = holder.FindTerritory(steal.BoroughId)!;
+        holder.Territories.Remove(territory);
+        team.Territories.Add(territory);
+
+        return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughStolen, holder.Id, steal.BoroughId);
+    }
+
+    private PlayEffect Claim(
+        Game game, GameBoard board, GameTeam team, HandCard card, ActiveBorough active, DateTimeOffset now)
+    {
+        var wasHot = board.HotBoroughId == active.BoroughId;
+
+        // The hot bonus is banked now and stays with the team even if the borough is later
+        // stolen. Hot also doubles the power cards drawn and how many may be kept.
         if (wasHot)
         {
             team.BonusPoints++;
-            territory.Locked = true;
         }
 
-        team.Territories.Add(territory);
+        var multiplier = wasHot ? _options.HotClaimPowerMultiplier : 1;
+        AddOffer(
+            game,
+            team.Id,
+            $"Claimed {BoroughCatalogue.NameOf(active.BoroughId)}",
+            card.PowerDraws * multiplier,
+            multiplier);
+
+        team.Territories.Add(new Territory { BoroughId = active.BoroughId });
         board.Active.Remove(active);
         TopUp(board);
 
@@ -297,82 +419,112 @@ public class GameEngine(IOptions<GamesOptions> options)
             RotateHot(board, game.HotRotationMinutes, now);
         }
 
-        return new PlayResult(
-            GameMutationStatus.Success,
-            wasHot ? PlayEffect.HotBoroughClaimed : PlayEffect.BoroughClaimed);
+        return wasHot ? PlayEffect.HotBoroughClaimed : PlayEffect.BoroughClaimed;
     }
 
-    private PlayResult PlaySteal(
-        Game game, GameTeam team, string boroughId, bool succeeded, DateTimeOffset now)
+    /// <summary>Fails every running steal whose clock has run out.</summary>
+    private static bool TimeOutSteals(Game game, DateTimeOffset now)
     {
-        var holder = game.FindTeamHolding(boroughId);
-        if (holder is null || holder.Id == team.Id)
-        {
-            return new PlayResult(GameMutationStatus.InvalidTarget);
-        }
+        var changed = false;
 
-        var territory = holder.FindTerritory(boroughId)!;
-        if (territory.IsLocked)
+        foreach (var powers in game.Powers)
         {
-            return new PlayResult(GameMutationStatus.BoroughLocked);
-        }
-
-        if (!succeeded)
-        {
-            // The defender gets a window to take one of the attacker's boroughs instead. They
-            // choose which, and need not travel for it.
-            game.CounterWindows.Add(new CounterWindow
+            foreach (var steal in powers.Cards.Select(c => c.Steal).OfType<StealAttempt>())
             {
-                TeamId = holder.Id,
-                AgainstTeamId = team.Id,
-                ExpiresAt = now.AddMinutes(_options.CounterWindowMinutes),
-            });
-
-            return new PlayResult(GameMutationStatus.Success, PlayEffect.StealFailed, holder.Id);
+                if (steal.Outcome is null && now >= steal.ExpiresAt)
+                {
+                    steal.Outcome = StealOutcome.TimedOut;
+                    OfferToDefender(game, powers.TeamId, steal);
+                    changed = true;
+                }
+            }
         }
 
-        holder.Territories.Remove(territory);
-        territory.Locked = true;
-        team.Territories.Add(territory);
-
-        return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughStolen, holder.Id);
+        return changed;
     }
 
-    private static PlayResult PlayCounter(
-        Game game, GameTeam team, string boroughId, bool succeeded, DateTimeOffset now)
+    /// <summary>
+    /// Gives the team holding a failed steal's target its draw for surviving it. Returns that
+    /// team, or null if nobody else holds the borough by now.
+    /// </summary>
+    private static string? OfferToDefender(Game game, string stealingTeamId, StealAttempt steal)
     {
-        var holder = game.FindTeamHolding(boroughId);
-        if (holder is null || holder.Id == team.Id)
+        var defender = game.FindTeamHolding(steal.BoroughId);
+        if (defender is null || defender.Id == stealingTeamId)
         {
-            return new PlayResult(GameMutationStatus.InvalidTarget);
+            return null;
         }
 
-        var window = game.CounterWindows.FirstOrDefault(
-            w => w.TeamId == team.Id && w.AgainstTeamId == holder.Id && w.ExpiresAt > now);
+        AddOffer(
+            game,
+            defender.Id,
+            $"Survived a steal on {BoroughCatalogue.NameOf(steal.BoroughId)}",
+            steal.PowerDraws,
+            keep: 1);
 
-        if (window is null)
-        {
-            return new PlayResult(GameMutationStatus.NoCounterWindow);
-        }
-
-        var territory = holder.FindTerritory(boroughId)!;
-        if (territory.IsLocked)
-        {
-            return new PlayResult(GameMutationStatus.BoroughLocked);
-        }
-
-        if (!succeeded)
-        {
-            // The window stays open — they can try again with another card until it lapses.
-            return new PlayResult(GameMutationStatus.Success);
-        }
-
-        holder.Territories.Remove(territory);
-        team.Territories.Add(territory);
-        game.CounterWindows.Remove(window);
-
-        return new PlayResult(GameMutationStatus.Success, PlayEffect.CounterSucceeded, holder.Id);
+        return defender.Id;
     }
+
+    private static void AddOffer(Game game, string teamId, string reason, int draws, int keep)
+    {
+        if (game.FindPowers(teamId) is not { } powers || game.PowerDeck is not { } deck)
+        {
+            return;
+        }
+
+        var cards = Draw(deck, draws);
+
+        // Every card is either held or waiting in an offer — there is nothing left to give.
+        if (cards.Count == 0)
+        {
+            return;
+        }
+
+        powers.Offers.Add(new PowerOffer
+        {
+            Id = Guid.NewGuid().ToString("n"),
+            Reason = reason,
+            Cards = cards,
+            Keep = Math.Min(keep, cards.Count),
+        });
+    }
+
+    /// <summary>
+    /// Takes cards off the top, shuffling the discard pile back in when the draw pile runs out.
+    /// Comes up short only when both are empty.
+    /// </summary>
+    private static List<PowerCard> Draw(PowerDeck deck, int count)
+    {
+        var drawn = new List<PowerCard>();
+
+        while (drawn.Count < count)
+        {
+            if (deck.DrawPile.Count == 0)
+            {
+                if (deck.DiscardPile.Count == 0)
+                {
+                    break;
+                }
+
+                deck.DrawPile.AddRange(deck.DiscardPile.OrderBy(_ => Random.Shared.Next()));
+                deck.DiscardPile.Clear();
+            }
+
+            var id = deck.DrawPile[0];
+            deck.DrawPile.RemoveAt(0);
+
+            // A card since dropped from the catalogue just leaves the deck.
+            if (PowerCatalogue.Find(id) is { } power)
+            {
+                drawn.Add(ToPowerCard(power));
+            }
+        }
+
+        return drawn;
+    }
+
+    private static void Discard(Game game, IEnumerable<PowerCard> cards) =>
+        game.PowerDeck?.DiscardPile.AddRange(cards.Select(c => c.PowerId));
 
     /// <summary>
     /// Replaces a resolved borough with any that is neither on the board nor already held.
@@ -393,70 +545,73 @@ public class GameEngine(IOptions<GamesOptions> options)
         board.Active.Add(new ActiveBorough { BoroughId = replacement });
     }
 
+    /// <summary>
+    /// Moves the hot borough to an active one that has never been hot. If every borough on the
+    /// board already has been, there is no hot borough until a fresh one is drawn.
+    /// </summary>
     private static void RotateHot(GameBoard board, int rotationMinutes, DateTimeOffset now)
     {
-        board.HotBoroughId = board.Active.Count > 0
-            ? board.Active[Random.Shared.Next(board.Active.Count)].BoroughId
+        if (board.HotBoroughId is { } outgoing && !board.FormerHotBoroughIds.Contains(outgoing))
+        {
+            board.FormerHotBoroughIds.Add(outgoing);
+        }
+
+        var candidates = HotCandidates(board);
+        board.HotBoroughId = candidates.Count > 0
+            ? candidates[Random.Shared.Next(candidates.Count)]
             : null;
 
         board.HotRotatesAt = now.AddMinutes(rotationMinutes);
     }
 
-    /// <summary>
-    /// Shuffles a hand of the requested size, guaranteeing at least <paramref name="minClaimCards"/>
-    /// claim challenges so a team is never left with nothing but steals to play.
-    /// </summary>
-    private static List<HandCard> DealHand(IReadOnlyList<Challenge> deck, int handSize, int minClaimCards)
-    {
-        var claims = deck
-            .Where(c => c.Type is ChallengeType.Claim)
-            .OrderBy(_ => Random.Shared.Next())
-            .Take(minClaimCards)
+    /// <summary>Active boroughs that have never been hot. The current one counts as having been.</summary>
+    private static List<string> HotCandidates(GameBoard board) =>
+        board.Active
+            .Select(a => a.BoroughId)
+            .Where(id => id != board.HotBoroughId && !board.FormerHotBoroughIds.Contains(id))
             .ToList();
 
-        var claimIds = claims.Select(c => c.Id).ToHashSet();
-
-        // Shuffle and take the rest, rather than drawing each card independently: independent
-        // draws repeat, and with a small deck a five card hand was coming up with two pairs. Two
-        // teams can still share a challenge — with fewer cards than the table needs, they have to.
-        var rest = deck
-            .Where(c => !claimIds.Contains(c.Id))
-            .OrderBy(_ => Random.Shared.Next())
-            .Take(Math.Max(0, handSize - claims.Count));
-
-        return claims.Concat(rest).OrderBy(_ => Random.Shared.Next()).Select(ToHandCard).ToList();
-    }
+    private static List<Challenge> ClaimsIn(IReadOnlyList<Challenge> deck) =>
+        deck.Where(c => c.Type is ChallengeType.Claim).ToList();
 
     /// <summary>
-    /// Draws a card the team isn't already holding. If they hold the whole deck — possible when
-    /// there are barely more challenges than a hand needs — a repeat is unavoidable. Forced to a
-    /// claim challenge if the one just played was the hand's last claim above the minimum, so the
-    /// hand never drops below it.
+    /// Shuffles and takes a hand, rather than drawing each card independently: independent draws
+    /// repeat, and with a small deck a five card hand was coming up with two pairs. Two teams can
+    /// still share a challenge — with fewer cards than the table needs, they have to.
     /// </summary>
-    private static HandCard DrawReplacement(
-        IReadOnlyList<Challenge> deck, TeamHand hand, HandCard played, int minClaimCards)
+    private static List<HandCard> DealHand(IReadOnlyList<Challenge> claims, int handSize) =>
+        claims.OrderBy(_ => Random.Shared.Next()).Take(handSize).Select(ToHandCard).ToList();
+
+    /// <summary>
+    /// Draws a claim challenge the team isn't already holding. If they hold every one — possible
+    /// when there are barely more claims than a hand needs — a repeat is unavoidable. Null only
+    /// if every claim challenge has been deleted since the game was dealt.
+    /// </summary>
+    private static HandCard? DrawReplacement(IReadOnlyList<Challenge> claims, TeamHand hand)
     {
-        var remainingClaims = hand.Cards.Count(c => c.Type is ChallengeType.Claim)
-            - (played.Type is ChallengeType.Claim ? 1 : 0);
-        var needsClaim = remainingClaims < minClaimCards;
-
         var held = hand.Cards.Select(c => c.ChallengeId).ToHashSet();
-        var candidates = needsClaim ? deck.Where(c => c.Type is ChallengeType.Claim).ToList() : deck;
-        var unheld = candidates.Where(challenge => !held.Contains(challenge.Id)).ToList();
-        var pool = unheld.Count > 0 ? unheld : candidates;
+        var unheld = claims.Where(challenge => !held.Contains(challenge.Id)).ToList();
+        var pool = unheld.Count > 0 ? unheld : claims;
 
-        return ToHandCard(pool[Random.Shared.Next(pool.Count)]);
+        return pool.Count > 0 ? ToHandCard(pool[Random.Shared.Next(pool.Count)]) : null;
     }
 
     private static HandCard ToHandCard(Challenge challenge) => new()
     {
         Id = Guid.NewGuid().ToString("n"),
         ChallengeId = challenge.Id,
-        Type = challenge.Type,
         Title = challenge.Title,
         Summary = challenge.Summary,
         FurtherDetails = challenge.FurtherDetails,
-        StealMinutes = challenge.Type is ChallengeType.Steal ? challenge.EffectiveStealMinutes : null,
+        PowerDraws = challenge.EffectivePowerDraws,
     };
 
+    private static PowerCard ToPowerCard(PowerDefinition power) => new()
+    {
+        Id = Guid.NewGuid().ToString("n"),
+        PowerId = power.Id,
+        Kind = power.Kind,
+        Title = power.Title,
+        Description = power.Description,
+    };
 }
