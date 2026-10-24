@@ -318,6 +318,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         string sub,
         IReadOnlyList<Challenge> deck,
         PowerConfiguration? powers,
+        IReadOnlyList<PowerDefinition> cards,
         CancellationToken cancellationToken) =>
         MutateAsync(code, game =>
         {
@@ -347,7 +348,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
 
             // Dealing the board and the hands is the engine's job — starting is where a lobby
             // stops being a list of names and becomes a game.
-            return engine.Start(game, deck, powers, DateTimeOffset.UtcNow);
+            return engine.Start(game, deck, powers, cards, DateTimeOffset.UtcNow);
         }, cancellationToken);
 
     /// <summary>

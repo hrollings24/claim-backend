@@ -46,8 +46,13 @@ public class GameEngine(IOptions<GamesOptions> options)
 {
     private readonly GamesOptions _options = options.Value;
 
+    /// <param name="cards">Every power card that exists; the configuration says how many of each.</param>
     public GameMutationStatus Start(
-        Game game, IReadOnlyList<Challenge> deck, PowerConfiguration powers, DateTimeOffset now)
+        Game game,
+        IReadOnlyList<Challenge> deck,
+        PowerConfiguration powers,
+        IReadOnlyList<PowerDefinition> cards,
+        DateTimeOffset now)
     {
         // There is nobody to steal from with one team.
         if (game.Teams.Count < 2)
@@ -58,18 +63,19 @@ public class GameEngine(IOptions<GamesOptions> options)
         // Hands are dealt from claim challenges; steal challenges are what a Steal card reveals,
         // so with Steals in the power deck and none to reveal, one could be drawn and never played.
         var claims = ClaimsIn(deck);
-        var needsSteals = PowerCatalogue.All.Any(p => p.Kind is PowerKind.Steal && powers.CountOf(p.Id) > 0);
+        var inDeck = cards.Where(c => powers.CountOf(c.Id) > 0).ToList();
+        var needsSteals = inDeck.Any(c => c.Kind is PowerKind.Steal);
         if (claims.Count < _options.HandSize || (needsSteals && !deck.Any(c => c.Type is ChallengeType.Steal)))
         {
             return GameMutationStatus.NotEnoughChallenges;
         }
 
-        var powerPile = PowerCatalogue.All
+        var powerPile = inDeck
             .SelectMany(p => Enumerable.Repeat(p.Id, powers.CountOf(p.Id)))
             .OrderBy(_ => Random.Shared.Next())
             .ToList();
 
-        // Possible only if the catalogue has dropped every card the configuration names.
+        // Possible only if every card the configuration names has since been deleted.
         if (powerPile.Count == 0)
         {
             return GameMutationStatus.EmptyPowerDeck;
@@ -94,7 +100,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             game.Powers.Add(new TeamPowers { TeamId = team.Id, Cards = [], Offers = [] });
         }
 
-        game.PowerDeck = new PowerDeck { DrawPile = powerPile, DiscardPile = [] };
+        game.PowerDeck = new PowerDeck { DrawPile = powerPile, DiscardPile = [], Cards = inDeck };
         game.StartedAt = now;
         game.EndsAt = now.AddMinutes(game.DurationMinutes);
         game.Status = GameStatus.InProgress;
@@ -513,8 +519,9 @@ public class GameEngine(IOptions<GamesOptions> options)
             var id = deck.DrawPile[0];
             deck.DrawPile.RemoveAt(0);
 
-            // A card since dropped from the catalogue just leaves the deck.
-            if (PowerCatalogue.Find(id) is { } power)
+            // Only a game dealt before cards were copied can meet an id it doesn't know; that card
+            // just leaves the deck.
+            if (deck.Find(id) is { } power)
             {
                 drawn.Add(ToPowerCard(power));
             }

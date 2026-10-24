@@ -69,10 +69,14 @@ public class PowerConfigurationStore(IAmazonDynamoDB dynamo, IOptions<Challenges
     public async Task<PowerConfiguration?> FindAsync(string id, CancellationToken cancellationToken) =>
         (await ListAsync(cancellationToken)).FirstOrDefault(c => c.Id == id);
 
+    /// <param name="cardIds">Every card that exists; counts for anything else are refused.</param>
     public async Task<(PowerConfigurationMutationStatus Status, PowerConfiguration? Configuration)> CreateAsync(
-        string name, IReadOnlyDictionary<string, int> counts, CancellationToken cancellationToken)
+        string name,
+        IReadOnlyDictionary<string, int> counts,
+        IReadOnlySet<string> cardIds,
+        CancellationToken cancellationToken)
     {
-        if (Normalize(counts) is not { } normalized)
+        if (Normalize(counts, cardIds) is not { } normalized)
         {
             return (PowerConfigurationMutationStatus.InvalidCounts, null);
         }
@@ -100,9 +104,13 @@ public class PowerConfigurationStore(IAmazonDynamoDB dynamo, IOptions<Challenges
     /// the same moment is not worth a version check.
     /// </summary>
     public async Task<(PowerConfigurationMutationStatus Status, PowerConfiguration? Configuration)> UpdateAsync(
-        string id, string name, IReadOnlyDictionary<string, int> counts, CancellationToken cancellationToken)
+        string id,
+        string name,
+        IReadOnlyDictionary<string, int> counts,
+        IReadOnlySet<string> cardIds,
+        CancellationToken cancellationToken)
     {
-        if (Normalize(counts) is not { } normalized)
+        if (Normalize(counts, cardIds) is not { } normalized)
         {
             return (PowerConfigurationMutationStatus.InvalidCounts, null);
         }
@@ -127,12 +135,13 @@ public class PowerConfigurationStore(IAmazonDynamoDB dynamo, IOptions<Challenges
     }
 
     /// <summary>
-    /// Keeps only cards the catalogue knows, drops zeros, and refuses anything out of range or a
-    /// deck with no cards at all — a game dealt from it would never draw anything.
+    /// Drops zeros, and refuses cards that don't exist, counts out of range, or a deck with no
+    /// cards at all — a game dealt from it would never draw anything.
     /// </summary>
-    private static Dictionary<string, int>? Normalize(IReadOnlyDictionary<string, int> counts)
+    private static Dictionary<string, int>? Normalize(
+        IReadOnlyDictionary<string, int> counts, IReadOnlySet<string> cardIds)
     {
-        if (counts.Any(c => PowerCatalogue.Find(c.Key) is null || c.Value is < 0 or > MaxCopies))
+        if (counts.Any(c => !cardIds.Contains(c.Key) || c.Value is < 0 or > MaxCopies))
         {
             return null;
         }

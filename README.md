@@ -49,9 +49,12 @@ draws power cards — as many as the challenge says (`PowerDraws`, 1–5, defaul
 team keeps one. The hot borough is worth an extra point, draws twice as many, and lets the team
 keep two. A failed claim spends the card and draws nothing.
 
-**Power cards** (`Powers/PowerCatalogue.cs`) are **Steal** and the honour-system curse
-**No tube** (20 minutes). A team holds at most five unplayed; played ones stay listed, marked as
-played. Curses are only recorded — the team tells its target over the group chat.
+**Power cards** are **Steal**, built in (`Powers/PowerCatalogue.cs`), plus any **Curse** or
+**Boost** a player writes in the app. Anyone can add, edit or delete those; they're honour
+system — the app only records that one was played, and the team says so in the group chat. A
+team holds at most five unplayed; played ones stay listed, marked as played. Player-written cards
+live in the challenges table under a `POWER_CARD` partition; the original No tube card is written
+there once, keeping its `no-tube` id. A game copies the wording of its cards when it starts.
 
 Each game draws from one shared power deck, built from the **power card configuration** the
 host picks in the lobby (a game can't start without one). Cards a team doesn't keep, or later
@@ -66,6 +69,10 @@ table under their own `POWER_CONFIG` partition, so they need no extra infrastruc
 | ------ | -------------------------------------- | --------------------------------------------------- |
 | GET    | `/api/power-configurations`            | All configurations, every card listed with its count |
 | GET    | `/api/power-configurations/cards`      | Every card a configuration can include              |
+| GET    | `/api/power-cards`                     | Every power card, Steal first                       |
+| POST   | `/api/power-cards`                     | `{ kind: "Curse" \| "Boost", title, description }`  |
+| PUT    | `/api/power-cards/{id}`                | Same body; Steal can't be changed                   |
+| DELETE | `/api/power-cards/{id}`                | Configurations that counted it just drop it         |
 | GET    | `/api/power-configurations/{id}`       |                                                     |
 | POST   | `/api/power-configurations`            | `{ name, counts: { "steal": 5, "no-tube": 2 } }`     |
 | PUT    | `/api/power-configurations/{id}`       | Same body; replaces the name and all counts         |

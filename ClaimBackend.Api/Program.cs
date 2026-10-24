@@ -121,6 +121,7 @@ builder.Services.Configure<ChallengesOptions>(
 
 builder.Services.AddSingleton<ChallengeStore>();
 builder.Services.AddSingleton<PowerConfigurationStore>();
+builder.Services.AddSingleton<PowerCardStore>();
 
 builder.Services.Configure<PushOptions>(builder.Configuration.GetSection(PushOptions.SectionName));
 

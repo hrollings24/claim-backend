@@ -83,6 +83,16 @@ public class PowerDeck
     public required List<string> DrawPile { get; init; }
 
     public required List<string> DiscardPile { get; init; }
+
+    /// <summary>
+    /// The wording of every card in the deck, copied when the game starts, so a card edited or
+    /// deleted mid-game still reads as it did when it was dealt. Empty for games dealt before
+    /// this was kept, which fall back to <see cref="PowerCatalogue.FindLegacy"/>.
+    /// </summary>
+    public List<PowerDefinition> Cards { get; init; } = [];
+
+    public PowerDefinition? Find(string id) =>
+        Cards.FirstOrDefault(c => c.Id == id) ?? PowerCatalogue.FindLegacy(id);
 }
 
 public class TeamPowers

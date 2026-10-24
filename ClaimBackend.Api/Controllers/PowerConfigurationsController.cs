@@ -11,23 +11,24 @@ namespace ClaimBackend.Api.Controllers;
 [ApiController]
 [Route("api/power-configurations")]
 [Authorize]
-public class PowerConfigurationsController(PowerConfigurationStore store) : ControllerBase
+public class PowerConfigurationsController(PowerConfigurationStore store, PowerCardStore cards) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<PowerConfigurationDto>>> List(CancellationToken cancellationToken)
     {
         var configurations = await store.ListAsync(cancellationToken);
+        var allCards = await cards.ListAsync(cancellationToken);
 
         return configurations
             .OrderBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Select(ToDto)
+            .Select(c => ToDto(c, allCards))
             .ToList();
     }
 
-    /// <summary>Every card a configuration can include, for building a new one.</summary>
+    /// <summary>Every card a configuration can include, all at zero, for building a new one.</summary>
     [HttpGet("cards")]
-    public ActionResult<IReadOnlyList<PowerCountDto>> Cards() =>
-        PowerCatalogue.All
+    public async Task<ActionResult<IReadOnlyList<PowerCountDto>>> Cards(CancellationToken cancellationToken) =>
+        (await cards.ListAsync(cancellationToken))
             .Select(p => new PowerCountDto(p.Id, p.Kind.ToString(), p.Title, p.Description, 0))
             .ToList();
 
@@ -36,17 +37,21 @@ public class PowerConfigurationsController(PowerConfigurationStore store) : Cont
     {
         var configuration = await store.FindAsync(id, cancellationToken);
 
-        return configuration is null ? NotFoundProblem() : ToDto(configuration);
+        return configuration is null
+            ? NotFoundProblem()
+            : ToDto(configuration, await cards.ListAsync(cancellationToken));
     }
 
     [HttpPost]
     public async Task<ActionResult<PowerConfigurationDto>> Create(
         [FromBody] SavePowerConfigurationRequest request, CancellationToken cancellationToken)
     {
-        var (status, configuration) = await store.CreateAsync(request.Name.Trim(), request.Counts, cancellationToken);
+        var allCards = await cards.ListAsync(cancellationToken);
+        var (status, configuration) = await store.CreateAsync(
+            request.Name.Trim(), request.Counts, IdsOf(allCards), cancellationToken);
 
         return status is PowerConfigurationMutationStatus.Success
-            ? CreatedAtAction(nameof(Get), new { id = configuration!.Id }, ToDto(configuration))
+            ? CreatedAtAction(nameof(Get), new { id = configuration!.Id }, ToDto(configuration, allCards))
             : Failure(status);
     }
 
@@ -54,10 +59,16 @@ public class PowerConfigurationsController(PowerConfigurationStore store) : Cont
     public async Task<ActionResult<PowerConfigurationDto>> Update(
         string id, [FromBody] SavePowerConfigurationRequest request, CancellationToken cancellationToken)
     {
-        var (status, configuration) = await store.UpdateAsync(id, request.Name.Trim(), request.Counts, cancellationToken);
+        var allCards = await cards.ListAsync(cancellationToken);
+        var (status, configuration) = await store.UpdateAsync(
+            id, request.Name.Trim(), request.Counts, IdsOf(allCards), cancellationToken);
 
-        return status is PowerConfigurationMutationStatus.Success ? ToDto(configuration!) : Failure(status);
+        return status is PowerConfigurationMutationStatus.Success
+            ? ToDto(configuration!, allCards)
+            : Failure(status);
     }
+
+    private static HashSet<string> IdsOf(IEnumerable<PowerDefinition> cards) => cards.Select(c => c.Id).ToHashSet();
 
     private ActionResult NotFoundProblem() =>
         Problem(title: "That power card configuration no longer exists", statusCode: StatusCodes.Status404NotFound);
@@ -77,11 +88,11 @@ public class PowerConfigurationsController(PowerConfigurationStore store) : Cont
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unhandled status."),
     };
 
-    private static PowerConfigurationDto ToDto(PowerConfiguration configuration) => new(
+    private static PowerConfigurationDto ToDto(PowerConfiguration configuration, IReadOnlyList<PowerDefinition> cards) => new(
         configuration.Id,
         configuration.Name,
-        PowerCatalogue.All
+        cards
             .Select(p => new PowerCountDto(p.Id, p.Kind.ToString(), p.Title, p.Description, configuration.CountOf(p.Id)))
             .ToList(),
-        configuration.TotalCards);
+        configuration.TotalCards(cards));
 }

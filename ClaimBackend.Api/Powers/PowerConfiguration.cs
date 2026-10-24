@@ -12,18 +12,18 @@ public class PowerConfiguration
     public required string Id { get; init; }
     public required string Name { get; set; }
 
-    /// <summary>Power card id to how many copies. Ids the catalogue no longer has are ignored.</summary>
+    /// <summary>Power card id to how many copies. Ids of cards since deleted are ignored.</summary>
     public required Dictionary<string, int> Counts { get; set; }
 
     public required DateTimeOffset CreatedAt { get; init; }
 
     public int CountOf(string powerId) => Counts.GetValueOrDefault(powerId);
 
-    /// <summary>Cards the deck will actually hold — only those the catalogue still knows.</summary>
-    public int TotalCards => PowerCatalogue.All.Sum(p => CountOf(p.Id));
+    /// <summary>Cards the deck will actually hold — only those that still exist.</summary>
+    public int TotalCards(IEnumerable<PowerDefinition> cards) => cards.Sum(c => CountOf(c.Id));
 }
 
-/// <summary>One row per card in the catalogue, zeros included, so the editor can list them all.</summary>
+/// <summary>One row per card that exists, zeros included, so the editor can list them all.</summary>
 public record PowerCountDto(string PowerId, string Kind, string Title, string Description, int Count);
 
 public record PowerConfigurationDto(string Id, string Name, IReadOnlyList<PowerCountDto> Cards, int TotalCards);
@@ -35,3 +35,12 @@ public record PowerConfigurationDto(string Id, string Name, IReadOnlyList<PowerC
 public record SavePowerConfigurationRequest(
     [Required, StringLength(40, MinimumLength = 1)] string Name,
     [Required] Dictionary<string, int> Counts);
+
+/// <param name="IsBuiltIn">Steal: it has rules behind it, so nobody can edit or delete it.</param>
+public record PowerCardDefinitionDto(string Id, string Kind, string Title, string Description, bool IsBuiltIn);
+
+/// <summary><paramref name="Kind"/> is Curse or Boost — there is only ever the one Steal.</summary>
+public record SavePowerCardRequest(
+    [Required] PowerKind Kind,
+    [Required, StringLength(60, MinimumLength = 1)] string Title,
+    [Required, StringLength(500, MinimumLength = 1)] string Description);

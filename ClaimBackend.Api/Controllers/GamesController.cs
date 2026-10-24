@@ -18,6 +18,7 @@ public class GamesController(
     ChallengeStore challenges,
     GameNotifier notifier,
     PowerConfigurationStore powerConfigurations,
+    PowerCardStore powerCards,
     IOptions<GamesOptions> options) : ControllerBase
 {
     [HttpPost]
@@ -260,7 +261,9 @@ public class GamesController(
             ? await powerConfigurations.FindAsync(configurationId, cancellationToken)
             : null;
 
-        var result = await store.StartAsync(normalized, Sub, deck, powers, cancellationToken);
+        var cards = await powerCards.ListAsync(cancellationToken);
+
+        var result = await store.StartAsync(normalized, Sub, deck, powers, cards, cancellationToken);
 
         if (result.Status is GameMutationStatus.Success)
         {
