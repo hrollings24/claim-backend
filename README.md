@@ -83,10 +83,13 @@ the host picks a size in the lobby.
 
 A **curse** is cast on a team, who are notified and see it in the app. It can have a duration,
 after which it lifts on its own; without one it lasts until the cursed team marks it cleared.
-**Veto** and **Curse Reverse** are built in and never applied automatically — the targeted team
-uses one on a curse while it's active. A Veto cancels it (or stops a steal on one of their
-boroughs); a Reverse ends it and casts it afresh, full time, on the sender. A reversal can be
-vetoed but not reversed again.
+
+Besides Steal, three more cards are built in. **Curse Reverse** is never applied automatically —
+the cursed team uses it on a curse while it's active, ending it and casting it afresh, full time,
+on the sender; a reversal can't be reversed again. **Fortify** locks one of your boroughs for the
+rest of the game, though not while a steal on it is running. **Swap** commits to another team,
+reveals their power cards, and then takes one and gives one back. Card kinds and statuses are
+stored as numbers inside games, so their enum values are pinned (3 was Veto, since removed).
 
 Playing a **Steal** at a borough another team holds reveals a random steal challenge and starts
 its clock. Report the result before it runs out: success moves the borough, failure (or the
@@ -98,12 +101,12 @@ bouncing back and forth. A borough is hot at most once per game.
 | ------ | ----------------------------------------------- | ------------------------------------------- |
 | POST   | `/api/games/{code}/play`                        | Claim: `{ cardId, boroughId, succeeded }`   |
 | POST   | `/api/games/{code}/powers/offers/{offerId}/keep` | `{ cardIds }`; empty turns the offer down  |
-| POST   | `/api/games/{code}/powers/{cardId}/play`        | `{ boroughId }` for a Steal, `{ targetTeamId }` for a curse |
+| POST   | `/api/games/{code}/powers/{cardId}/play`        | `{ boroughId }` for Steal or Fortify, `{ targetTeamId }` for a curse or Swap |
 | POST   | `/api/games/{code}/powers/{cardId}/resolve`     | Steal only: `{ succeeded }`, before the clock runs out |
 | POST   | `/api/games/{code}/powers/{cardId}/discard`     | Drops an unplayed card to make room         |
-| POST   | `/api/games/{code}/curses/{curseId}/respond`    | `{ cardId }` — a Veto or Curse Reverse       |
+| POST   | `/api/games/{code}/curses/{curseId}/respond`    | `{ cardId }` — a Curse Reverse               |
 | POST   | `/api/games/{code}/curses/{curseId}/clear`      | Untimed curses only, by the cursed team      |
-| POST   | `/api/games/{code}/steals/{stealId}/veto`       | `{ cardId }` — a Veto, by the defending team |
+| POST   | `/api/games/{code}/powers/{cardId}/swap`        | `{ takeCardId, giveCardId }` — finishes a Swap |
 | POST   | `/api/games/{code}/board-size`                  | Host only, lobby: `{ boardSize }`, null = auto |
 
 Codes come from a 32-character alphabet with `I`, `O`, `0` and `1` left out, since they get read

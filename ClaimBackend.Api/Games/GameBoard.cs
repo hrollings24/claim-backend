@@ -13,12 +13,15 @@ public class ActiveBorough
 }
 
 /// <summary>
-/// A borough a team holds. Nothing is ever settled for good — any of them can be stolen — and
-/// steals being rare is what stops boroughs bouncing back and forth.
+/// A borough a team holds. Any of them can be stolen — steals being rare is what stops boroughs
+/// bouncing back and forth — unless its holder played Fortify on it.
 /// </summary>
 public class Territory
 {
     public required string BoroughId { get; init; }
+
+    /// <summary>Set by Fortify; it can't be stolen for the rest of the game.</summary>
+    public bool Fortified { get; set; }
 }
 
 /// <summary>

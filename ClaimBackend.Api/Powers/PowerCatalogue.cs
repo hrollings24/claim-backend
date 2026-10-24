@@ -1,24 +1,31 @@
 namespace ClaimBackend.Api.Powers;
 
+/// <summary>
+/// Stored as numbers inside each game, so every value is pinned: removing or reordering one must
+/// never renumber the rest. 3 was Veto, since removed — don't reuse it.
+/// </summary>
 public enum PowerKind
 {
     /// <summary>Played at a borough another team holds; reveals a steal challenge and starts its clock.</summary>
-    Steal,
+    Steal = 0,
 
     /// <summary>
     /// Played on another team. Honour system: the app only records that it was played — the team
     /// tells whoever they curse over the group chat, and that team sticks to it.
     /// </summary>
-    Curse,
+    Curse = 1,
 
     /// <summary>Played on yourself. Honour system, same as a curse.</summary>
-    Boost,
-
-    /// <summary>Used on a curse aimed at you, or a steal on one of your boroughs, to cancel it.</summary>
-    Veto,
+    Boost = 2,
 
     /// <summary>Used on a curse aimed at you to send it back to the team that cast it.</summary>
-    Reverse,
+    Reverse = 4,
+
+    /// <summary>Played on one of your boroughs to lock it for the rest of the game.</summary>
+    Fortify = 5,
+
+    /// <summary>Played on another team: see their power cards, take one, give one back.</summary>
+    Swap = 6,
 }
 
 /// <param name="DurationMinutes">
@@ -44,20 +51,26 @@ public static class PowerCatalogue
         "Steal",
         "Pick a borough another team holds. A steal challenge is revealed and the clock starts — finish it in time and the borough is yours.");
 
-    public static readonly PowerDefinition Veto = new(
-        "veto",
-        PowerKind.Veto,
-        "Veto",
-        "Cancel a curse played on you, or stop a steal on one of your boroughs. Use it from the curse or the steal itself.");
-
     public static readonly PowerDefinition Reverse = new(
         "reverse",
         PowerKind.Reverse,
         "Curse Reverse",
         "Send a curse played on you back to the team that cast it — it starts again on them. A curse that's already been reversed can't be reversed again.");
 
+    public static readonly PowerDefinition Fortify = new(
+        "fortify",
+        PowerKind.Fortify,
+        "Fortify",
+        "Lock one of your boroughs for the rest of the game — nobody can steal it. Not while a steal on it is already running.");
+
+    public static readonly PowerDefinition Swap = new(
+        "swap",
+        PowerKind.Swap,
+        "Swap",
+        "Pick another team. Their power cards are revealed to you: take the one you want, and give them one of yours.");
+
     /// <summary>The cards with rules behind them, which nobody can edit or delete.</summary>
-    public static readonly IReadOnlyList<PowerDefinition> BuiltIn = [Steal, Veto, Reverse];
+    public static readonly IReadOnlyList<PowerDefinition> BuiltIn = [Steal, Reverse, Fortify, Swap];
 
     /// <summary>
     /// Cards that shipped in code before players could write their own. Written to the table once,

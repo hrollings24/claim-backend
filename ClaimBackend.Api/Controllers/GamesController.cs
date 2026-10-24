@@ -120,8 +120,8 @@ public class GamesController(
     }
 
     /// <summary>
-    /// Uses a Veto or Curse Reverse on a curse aimed at the caller's team. Never done for them —
-    /// a curse stays on until they choose to answer it, or it runs out.
+    /// Uses a Curse Reverse on a curse aimed at the caller's team. Never done for them — a curse
+    /// stays on until they choose to answer it, or it runs out.
     /// </summary>
     [HttpPost("{code}/curses/{curseId}/respond")]
     public async Task<ActionResult<GameDto>> RespondToCurse(
@@ -144,13 +144,13 @@ public class GamesController(
             : Failure(result.Status, code);
     }
 
-    /// <summary>Uses a Veto on a running steal against one of the caller's team's boroughs.</summary>
-    [HttpPost("{code}/steals/{stealId}/veto")]
-    public async Task<ActionResult<GameDto>> VetoSteal(
-        string code, string stealId, [FromBody] RespondRequest request, CancellationToken cancellationToken)
+    /// <summary>Finishes a played Swap: one of their cards taken, one of yours given.</summary>
+    [HttpPost("{code}/powers/{cardId}/swap")]
+    public async Task<ActionResult<GameDto>> CompleteSwap(
+        string code, string cardId, [FromBody] CompleteSwapRequest request, CancellationToken cancellationToken)
     {
-        var (result, play) = await store.VetoStealAsync(
-            GameCodeGenerator.Normalize(code), Sub, stealId, request.CardId, cancellationToken);
+        var (result, play) = await store.CompleteSwapAsync(
+            GameCodeGenerator.Normalize(code), Sub, cardId, request.TakeCardId, request.GiveCardId, cancellationToken);
 
         return await Played(result, play, code, cancellationToken);
     }
@@ -377,7 +377,8 @@ public class GamesController(
                 territory.BoroughId,
                 BoroughCatalogue.NameOf(territory.BoroughId),
                 team.Id,
-                team.Name)))
+                team.Name,
+                territory.Fortified)))
             .OrderBy(t => t.Name)
             .ToList();
 
@@ -433,6 +434,17 @@ public class GamesController(
                             c.Steal.Summary,
                             c.Steal.ExpiresAt)))
                     .ToList(),
+            yourPowers?.Cards
+                .Where(c => c.Swap is { CompletedAt: null })
+                .Select(c => new SwapDto(
+                    c.Id,
+                    c.Swap!.TargetTeamId,
+                    TeamName(game, c.Swap.TargetTeamId),
+                    game.FindPowers(c.Swap.TargetTeamId)?.Cards
+                        .Where(theirs => !theirs.IsPlayed)
+                        .Select(ToPowerCardDto)
+                        .ToList() ?? []))
+                .ToList() ?? [],
             options.Value.MaxPowerCards,
             game.PowerDeck?.DrawPile.Count ?? 0,
             game.PowerDeck?.DiscardPile.Count ?? 0,
@@ -570,7 +582,7 @@ public class GamesController(
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.RespondOnly => Problem(
-            title: "Use that card on a curse or steal aimed at you",
+            title: "Use that card on a curse aimed at you",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.CurseNotFound => Problem(
@@ -578,7 +590,7 @@ public class GamesController(
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.CannotReverse => Problem(
-            title: "That curse has already been reversed once — it can only be vetoed now",
+            title: "That curse has already been reversed once — it can't go back again",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.NotAResponse => Problem(
@@ -589,8 +601,28 @@ public class GamesController(
             title: "That curse lifts on its own when its time is up",
             statusCode: StatusCodes.Status409Conflict),
 
-        GameMutationStatus.StealNotFound => Problem(
-            title: "That steal is already over, or isn't on one of your boroughs",
+        GameMutationStatus.BoroughLocked => Problem(
+            title: "That borough is fortified — it can't be stolen",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.AlreadyFortified => Problem(
+            title: "That borough is already fortified",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.UnderAttack => Problem(
+            title: "A steal on that borough is already running — you can't fortify it now",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NothingToSwap => Problem(
+            title: "That team has no power cards to swap",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.SwapNotFound => Problem(
+            title: "That swap is already done",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotInTheirHand => Problem(
+            title: "They don't have that card any more — pick another",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.PowerHandFull => Problem(

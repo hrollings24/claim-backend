@@ -54,7 +54,8 @@ public record SetHotRotationRequest(
 
 public record ActiveBoroughDto(string Id, string Name, string Zone, bool IsHot);
 
-public record TerritoryDto(string Id, string Name, string TeamId, string TeamName);
+/// <param name="IsFortified">Locked by Fortify: it can't be stolen for the rest of the game.</param>
+public record TerritoryDto(string Id, string Name, string TeamId, string TeamName, bool IsFortified);
 
 /// <param name="PowerDraws">How many power cards completing it draws; doubled on the hot borough.</param>
 public record HandCardDto(
@@ -110,7 +111,13 @@ public record CurseDto(
     DateTimeOffset? EndsAt,
     bool IsReversal);
 
-/// <summary>A steal running against one of the caller's team's boroughs — the thing a Veto can stop.</summary>
+/// <summary>
+/// A Swap the caller's team has played and not finished: the other team's unplayed power cards,
+/// revealed so one can be picked.
+/// </summary>
+public record SwapDto(string CardId, string TeamId, string TeamName, IReadOnlyList<PowerCardDto> TheirCards);
+
+/// <summary>A steal running against one of the caller's team's boroughs, so they know it's coming.</summary>
 public record IncomingStealDto(
     string Id,
     string BoroughId,
@@ -141,6 +148,7 @@ public record GameBoardDto(
     IReadOnlyList<PowerOfferDto> YourPowerOffers,
     IReadOnlyList<CurseDto> ActiveCurses,
     IReadOnlyList<IncomingStealDto> IncomingSteals,
+    IReadOnlyList<SwapDto> YourSwaps,
     int MaxPowerCards,
     int PowerDeckCount,
     int PowerDiscardCount,
@@ -161,7 +169,13 @@ public record KeepPowersRequest([Required] IReadOnlyList<string> CardIds);
 /// </summary>
 public record PlayPowerRequest(string? BoroughId, string? TargetTeamId);
 
-/// <summary>The Veto or Curse Reverse to use.</summary>
+/// <summary>The Curse Reverse to use.</summary>
 public record RespondRequest([Required] string CardId);
+
+/// <summary>
+/// One of their cards to take and one of yours to give. Either may be left out only when that
+/// side has nothing left to swap.
+/// </summary>
+public record CompleteSwapRequest(string? TakeCardId, string? GiveCardId);
 
 public record ResolveStealRequest(bool Succeeded);

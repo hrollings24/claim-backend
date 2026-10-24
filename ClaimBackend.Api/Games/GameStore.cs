@@ -41,7 +41,12 @@ public enum GameMutationStatus
     CannotReverse,
     NotAResponse,
     CurseIsTimed,
-    StealNotFound,
+    BoroughLocked,
+    AlreadyFortified,
+    UnderAttack,
+    NothingToSwap,
+    SwapNotFound,
+    NotInTheirHand,
 }
 
 public record GameMutationResult(GameMutationStatus Status, Game? Game);
@@ -399,7 +404,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             engine.PlayPower(game, teamId, cardId, boroughId, targetTeamId, deck, DateTimeOffset.UtcNow),
             cancellationToken);
 
-    /// <summary>Uses a Veto or Curse Reverse on a curse aimed at the caller's team.</summary>
+    /// <summary>Uses a Curse Reverse on a curse aimed at the caller's team.</summary>
     public Task<(GameMutationResult Result, PlayResult Play)> RespondToCurseAsync(
         string code, string sub, string curseId, string cardId, CancellationToken cancellationToken) =>
         MutateAsTeamAsync(code, sub, (game, teamId) =>
@@ -412,11 +417,11 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             engine.ClearCurse(game, teamId, curseId, DateTimeOffset.UtcNow),
             cancellationToken);
 
-    /// <summary>Uses a Veto on a running steal against one of the caller's team's boroughs.</summary>
-    public Task<(GameMutationResult Result, PlayResult Play)> VetoStealAsync(
-        string code, string sub, string stealCardId, string vetoCardId, CancellationToken cancellationToken) =>
+    /// <summary>Finishes a played Swap — one card taken, one given.</summary>
+    public Task<(GameMutationResult Result, PlayResult Play)> CompleteSwapAsync(
+        string code, string sub, string swapCardId, string? takeCardId, string? giveCardId, CancellationToken cancellationToken) =>
         MutateAsTeamAsync(code, sub, (game, teamId) =>
-            engine.VetoSteal(game, teamId, stealCardId, vetoCardId, DateTimeOffset.UtcNow),
+            engine.CompleteSwap(game, teamId, swapCardId, takeCardId, giveCardId, DateTimeOffset.UtcNow),
             cancellationToken);
 
     /// <summary>Reports the outcome of a steal already played against its target.</summary>

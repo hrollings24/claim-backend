@@ -46,15 +46,7 @@ public class GameNotifier(PushSender sender)
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
                     $"{actor} is stealing {borough}",
-                    "They're on the clock. Veto it if you can.",
-                    Url(game)),
-                cancellationToken),
-
-            PlayEffect.StealVetoed => sender.SendAsync(
-                InTeam(game, play.CounterpartTeamId),
-                new PushNotification(
-                    $"{actor} vetoed your steal on {borough}",
-                    "Nothing moves — that Steal is spent.",
+                    "They're on the clock to take it off you.",
                     Url(game)),
                 cancellationToken),
 
@@ -62,15 +54,31 @@ public class GameNotifier(PushSender sender)
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
                     $"{actor} cursed you: {play.Detail}",
-                    "It's on you now. Open the app to see it — or veto or reverse it.",
+                    "It's on you now. Open the app to see it — or reverse it.",
                     Url(game)),
                 cancellationToken),
 
-            PlayEffect.CurseVetoed => sender.SendAsync(
+            PlayEffect.BoroughFortified => sender.SendAsync(
+                Everyone(game, except: actingTeamId),
+                new PushNotification(
+                    $"{actor} fortified {borough}",
+                    "It's theirs for the rest of the game — nobody can steal it.",
+                    Url(game)),
+                cancellationToken),
+
+            PlayEffect.SwapStarted => sender.SendAsync(
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
-                    $"{actor} vetoed your curse",
-                    $"{play.Detail} is off them.",
+                    $"{actor} is going through your power cards",
+                    "They're about to take one, and give you one of theirs.",
+                    Url(game)),
+                cancellationToken),
+
+            PlayEffect.Swapped => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} swapped power cards with you",
+                    $"They {play.Detail}.",
                     Url(game)),
                 cancellationToken),
 

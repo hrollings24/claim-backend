@@ -3,38 +3,35 @@ using ClaimBackend.Api.Powers;
 
 namespace ClaimBackend.Api.Games;
 
+/// <summary>Stored as numbers; values are pinned. 3 was Vetoed — don't reuse it.</summary>
 public enum StealOutcome
 {
-    Succeeded,
-    Failed,
+    Succeeded = 0,
+    Failed = 1,
 
     /// <summary>The clock ran out before anyone entered a result. Counts as a failure.</summary>
-    TimedOut,
-
-    /// <summary>The defending team used a Veto. Nothing moves, and nobody draws.</summary>
-    Vetoed,
+    TimedOut = 2,
 }
 
+/// <summary>Stored as numbers; values are pinned. 3 was Vetoed — don't reuse it.</summary>
 public enum CurseStatus
 {
-    Active,
+    Active = 0,
 
     /// <summary>The cursed team marked it done — only possible for a curse with no time on it.</summary>
-    Cleared,
+    Cleared = 1,
 
     /// <summary>A timed curse whose time ran out.</summary>
-    Expired,
-
-    Vetoed,
+    Expired = 2,
 
     /// <summary>Sent back; the curse now on the original caster is a separate one.</summary>
-    Reversed,
+    Reversed = 4,
 }
 
 /// <summary>
 /// A curse one team has cast on another. Kept on the game rather than the card, because both
-/// teams need to see it. It lands the moment it's cast: a Veto or Curse Reverse is never applied
-/// for the team — they choose to use one on it, while it's active.
+/// teams need to see it. It lands the moment it's cast: a Curse Reverse is never applied for the
+/// team — they choose to use one on it, while it's active.
 /// </summary>
 public class ActiveCurse
 {
@@ -51,7 +48,7 @@ public class ActiveCurse
     [JsonIgnore]
     public DateTimeOffset? EndsAt => DurationMinutes is { } minutes ? StartedAt.AddMinutes(minutes) : null;
 
-    /// <summary>A curse sent back by Curse Reverse. It can be vetoed, but not reversed again.</summary>
+    /// <summary>A curse sent back by Curse Reverse. It can't be reversed again.</summary>
     public bool IsReversal { get; init; }
 
     public CurseStatus Status { get; set; } = CurseStatus.Active;
@@ -81,6 +78,17 @@ public class StealAttempt
 }
 
 /// <summary>
+/// A played Swap. Committing to a team reveals their power cards to the swapping team, who then
+/// take one and give one back. Until then it stays open.
+/// </summary>
+public class SwapAttempt
+{
+    public required string TargetTeamId { get; init; }
+
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+/// <summary>
 /// A power card a team holds. Playing one doesn't remove it: it stays, marked as played, so the
 /// team can still see what they used and, for a steal, how it went.
 /// </summary>
@@ -99,6 +107,9 @@ public class PowerCard
 
     /// <summary>What it was played on, for the team's list of played cards — "Team B", "Camden".</summary>
     public string? PlayedOn { get; set; }
+
+    /// <summary>Swap only, set when it is played.</summary>
+    public SwapAttempt? Swap { get; set; }
 
     /// <summary>Steal only, set when it is played.</summary>
     public StealAttempt? Steal { get; set; }

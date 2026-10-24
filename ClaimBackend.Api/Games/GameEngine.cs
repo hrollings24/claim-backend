@@ -14,10 +14,11 @@ public enum PlayEffect
     BoroughStolen,
     StealFailed,
     StealStarted,
-    StealVetoed,
     CurseCast,
-    CurseVetoed,
     CurseReversed,
+    BoroughFortified,
+    SwapStarted,
+    Swapped,
 }
 
 /// <summary>
@@ -28,7 +29,7 @@ public enum PlayEffect
 /// whose caller has no borough of its own to notify about — a steal's target was chosen when the
 /// card was played, not on the request that resolves it.
 /// </summary>
-/// <param name="Detail">The curse's title, for effects about a curse.</param>
+/// <param name="Detail">The curse's title, or what changed hands in a swap.</param>
 public record PlayResult(
     GameMutationStatus Status,
     PlayEffect Effect = PlayEffect.Nothing,
@@ -294,9 +295,10 @@ public class GameEngine(IOptions<GamesOptions> options)
     /// <summary>
     /// Plays a power card. A curse needs a target team and lands on them at once; a boost is only
     /// marked as played. A steal needs a borough another team holds: the target is committed
-    /// first, then a steal challenge is revealed and its countdown starts. Veto and Curse Reverse
-    /// can't be played on their own — they're used from the curse or steal they answer. Nothing
-    /// played can be taken back.
+    /// first, then a steal challenge is revealed and its countdown starts. Fortify needs one of the
+    /// team's own boroughs; Swap needs another team, whose cards are then revealed. Curse Reverse
+    /// can't be played on its own — it's used from the curse it answers. Nothing played can be
+    /// taken back.
     /// </summary>
     public PlayResult PlayPower(
         Game game,
@@ -325,8 +327,52 @@ public class GameEngine(IOptions<GamesOptions> options)
 
         switch (card.Kind)
         {
-            case PowerKind.Veto or PowerKind.Reverse:
+            case PowerKind.Reverse:
                 return new PlayResult(GameMutationStatus.RespondOnly);
+
+            case PowerKind.Fortify:
+            {
+                var territory = boroughId is null ? null : game.FindTeam(teamId)?.FindTerritory(boroughId);
+                if (territory is null)
+                {
+                    return new PlayResult(GameMutationStatus.InvalidTarget);
+                }
+
+                if (territory.Fortified)
+                {
+                    return new PlayResult(GameMutationStatus.AlreadyFortified);
+                }
+
+                // Otherwise Fortify would cancel a steal outright, which nothing else can.
+                if (RunningSteals(game).Any(steal => steal.BoroughId == boroughId))
+                {
+                    return new PlayResult(GameMutationStatus.UnderAttack);
+                }
+
+                territory.Fortified = true;
+                card.PlayedAt = now;
+                card.PlayedOn = BoroughCatalogue.NameOf(boroughId!);
+                return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughFortified, BoroughId: boroughId);
+            }
+
+            case PowerKind.Swap:
+            {
+                var target = targetTeamId is null ? null : game.FindTeam(targetTeamId);
+                if (target is null || target.Id == teamId)
+                {
+                    return new PlayResult(GameMutationStatus.InvalidTarget);
+                }
+
+                if (game.FindPowers(target.Id) is not { UnplayedCount: > 0 })
+                {
+                    return new PlayResult(GameMutationStatus.NothingToSwap);
+                }
+
+                card.Swap = new SwapAttempt { TargetTeamId = target.Id };
+                card.PlayedAt = now;
+                card.PlayedOn = target.Name;
+                return new PlayResult(GameMutationStatus.Success, PlayEffect.SwapStarted, target.Id);
+            }
 
             case PowerKind.Curse:
             {
@@ -360,6 +406,11 @@ public class GameEngine(IOptions<GamesOptions> options)
                     return new PlayResult(GameMutationStatus.InvalidTarget);
                 }
 
+                if (holder.FindTerritory(boroughId!)!.Fortified)
+                {
+                    return new PlayResult(GameMutationStatus.BoroughLocked);
+                }
+
                 var steals = deck.Where(c => c.Type is ChallengeType.Steal).ToList();
                 if (steals.Count == 0)
                 {
@@ -390,9 +441,8 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>
-    /// Uses a Veto or Curse Reverse on an active curse aimed at the team. A Veto cancels it. A
-    /// Reverse ends it and casts it afresh on whoever sent it, with its full time again — unless
-    /// it is itself a reversal, which can't be sent back a second time.
+    /// Uses a Curse Reverse on an active curse aimed at the team: it ends, and is cast afresh — with
+    /// its full time — on whoever sent it. A curse that is itself a reversal can't be sent back.
     /// </summary>
     public PlayResult RespondToCurse(Game game, string teamId, string curseId, string cardId, DateTimeOffset now)
     {
@@ -409,27 +459,21 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         var card = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == cardId && !c.IsPlayed);
-        if (card is not { Kind: PowerKind.Veto or PowerKind.Reverse })
+        if (card is not { Kind: PowerKind.Reverse })
         {
             return new PlayResult(GameMutationStatus.NotAResponse);
         }
 
-        if (card.Kind is PowerKind.Reverse && curse.IsReversal)
+        if (curse.IsReversal)
         {
             return new PlayResult(GameMutationStatus.CannotReverse);
         }
 
+        curse.Status = CurseStatus.Reversed;
         curse.ResolvedAt = now;
         card.PlayedAt = now;
         card.PlayedOn = curse.Title;
 
-        if (card.Kind is PowerKind.Veto)
-        {
-            curse.Status = CurseStatus.Vetoed;
-            return new PlayResult(GameMutationStatus.Success, PlayEffect.CurseVetoed, curse.FromTeamId, Detail: curse.Title);
-        }
-
-        curse.Status = CurseStatus.Reversed;
         game.Curses.Add(new ActiveCurse
         {
             Id = Guid.NewGuid().ToString("n"),
@@ -474,38 +518,62 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>
-    /// Uses a Veto on a running steal against a borough the team holds. Nothing moves and nobody
-    /// draws; the stealing team's card is spent all the same.
+    /// Finishes a played Swap: takes one of the other team's unplayed power cards and gives them
+    /// one of the swapping team's. Either side may be left out only when that team has nothing
+    /// left to swap — so a team that played its last card on the Swap can still take one.
     /// </summary>
-    public PlayResult VetoSteal(Game game, string teamId, string stealCardId, string vetoCardId, DateTimeOffset now)
+    public PlayResult CompleteSwap(
+        Game game, string teamId, string swapCardId, string? takeCardId, string? giveCardId, DateTimeOffset now)
     {
         if (game.Status is not GameStatus.InProgress)
         {
             return new PlayResult(GameMutationStatus.GameNotRunning);
         }
 
-        var (stealingTeamId, steal) = game.Powers
-            .SelectMany(p => p.Cards.Select(c => (p.TeamId, c)))
-            .Where(x => x.c.Id == stealCardId && x.c.Steal is { Outcome: null })
-            .Select(x => (x.TeamId, x.c.Steal))
-            .FirstOrDefault();
-
-        if (steal is null || game.FindTeamHolding(steal.BoroughId)?.Id != teamId)
+        var mine = game.FindPowers(teamId);
+        var swap = mine?.Cards.FirstOrDefault(c => c.Id == swapCardId)?.Swap;
+        if (mine is null || swap is not { CompletedAt: null })
         {
-            return new PlayResult(GameMutationStatus.StealNotFound);
+            return new PlayResult(GameMutationStatus.SwapNotFound);
         }
 
-        var veto = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == vetoCardId && !c.IsPlayed);
-        if (veto is not { Kind: PowerKind.Veto })
+        if (game.FindPowers(swap.TargetTeamId) is not { } theirs)
         {
-            return new PlayResult(GameMutationStatus.NotAResponse);
+            return new PlayResult(GameMutationStatus.SwapNotFound);
         }
 
-        steal.Outcome = StealOutcome.Vetoed;
-        veto.PlayedAt = now;
-        veto.PlayedOn = $"the steal on {BoroughCatalogue.NameOf(steal.BoroughId)}";
+        var take = theirs.Cards.FirstOrDefault(c => c.Id == takeCardId && !c.IsPlayed);
+        if (take is null && (takeCardId is not null || theirs.UnplayedCount > 0))
+        {
+            return new PlayResult(GameMutationStatus.NotInTheirHand);
+        }
 
-        return new PlayResult(GameMutationStatus.Success, PlayEffect.StealVetoed, stealingTeamId, steal.BoroughId);
+        var give = mine.Cards.FirstOrDefault(c => c.Id == giveCardId && !c.IsPlayed);
+        if (give is null && (giveCardId is not null || mine.UnplayedCount > 0))
+        {
+            return new PlayResult(GameMutationStatus.CardNotInHand);
+        }
+
+        if (take is not null)
+        {
+            theirs.Cards.Remove(take);
+            mine.Cards.Add(take);
+        }
+
+        if (give is not null)
+        {
+            mine.Cards.Remove(give);
+            theirs.Cards.Add(give);
+        }
+
+        swap.CompletedAt = now;
+
+        var targetName = game.FindTeam(swap.TargetTeamId)?.Name ?? "another team";
+        var detail = $"took {take?.Title ?? "nothing"}, gave {give?.Title ?? "nothing"}";
+        var swapCard = mine.Cards.First(c => c.Id == swapCardId);
+        swapCard.PlayedOn = $"{targetName}: {detail}";
+
+        return new PlayResult(GameMutationStatus.Success, PlayEffect.Swapped, swap.TargetTeamId, Detail: detail);
     }
 
     /// <summary>
@@ -604,6 +672,9 @@ public class GameEngine(IOptions<GamesOptions> options)
 
         return wasHot ? PlayEffect.HotBoroughClaimed : PlayEffect.BoroughClaimed;
     }
+
+    private static IEnumerable<StealAttempt> RunningSteals(Game game) =>
+        game.Powers.SelectMany(p => p.Cards).Select(c => c.Steal).OfType<StealAttempt>().Where(s => s.Outcome is null);
 
     /// <summary>Lifts every timed curse whose time is up.</summary>
     private static bool ExpireCurses(Game game, DateTimeOffset now)
