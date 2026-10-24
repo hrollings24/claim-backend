@@ -19,6 +19,7 @@ public class GamesController(
     GameNotifier notifier,
     PowerConfigurationStore powerConfigurations,
     PowerCardStore powerCards,
+    GameEngine engine,
     IOptions<GamesOptions> options) : ControllerBase
 {
     [HttpPost]
@@ -112,12 +113,74 @@ public class GamesController(
     {
         var deck = await challenges.GetDeckAsync(cancellationToken);
 
-        var result = await store.PlayPowerAsync(
-            GameCodeGenerator.Normalize(code), Sub, cardId, request?.BoroughId, deck, cancellationToken);
+        var (result, play) = await store.PlayPowerAsync(
+            GameCodeGenerator.Normalize(code), Sub, cardId, request?.BoroughId, request?.TargetTeamId, deck, cancellationToken);
+
+        return await Played(result, play, code, cancellationToken);
+    }
+
+    /// <summary>
+    /// Uses a Veto or Curse Reverse on a curse aimed at the caller's team. Never done for them —
+    /// a curse stays on until they choose to answer it, or it runs out.
+    /// </summary>
+    [HttpPost("{code}/curses/{curseId}/respond")]
+    public async Task<ActionResult<GameDto>> RespondToCurse(
+        string code, string curseId, [FromBody] RespondRequest request, CancellationToken cancellationToken)
+    {
+        var (result, play) = await store.RespondToCurseAsync(
+            GameCodeGenerator.Normalize(code), Sub, curseId, request.CardId, cancellationToken);
+
+        return await Played(result, play, code, cancellationToken);
+    }
+
+    /// <summary>Marks a curse with no time on it as done.</summary>
+    [HttpPost("{code}/curses/{curseId}/clear")]
+    public async Task<ActionResult<GameDto>> ClearCurse(string code, string curseId, CancellationToken cancellationToken)
+    {
+        var result = await store.ClearCurseAsync(GameCodeGenerator.Normalize(code), Sub, curseId, cancellationToken);
 
         return result.Status is GameMutationStatus.Success
             ? ToDto(result.Game!)
             : Failure(result.Status, code);
+    }
+
+    /// <summary>Uses a Veto on a running steal against one of the caller's team's boroughs.</summary>
+    [HttpPost("{code}/steals/{stealId}/veto")]
+    public async Task<ActionResult<GameDto>> VetoSteal(
+        string code, string stealId, [FromBody] RespondRequest request, CancellationToken cancellationToken)
+    {
+        var (result, play) = await store.VetoStealAsync(
+            GameCodeGenerator.Normalize(code), Sub, stealId, request.CardId, cancellationToken);
+
+        return await Played(result, play, code, cancellationToken);
+    }
+
+    [HttpPost("{code}/board-size")]
+    public async Task<ActionResult<GameDto>> SetBoardSize(
+        string code, [FromBody] SetBoardSizeRequest request, CancellationToken cancellationToken)
+    {
+        var result = await store.SetBoardSizeAsync(
+            GameCodeGenerator.Normalize(code), Sub, request.BoardSize, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
+    /// <summary>Tells whoever a move affected, then returns the game — or the reason it was refused.</summary>
+    private async Task<ActionResult<GameDto>> Played(
+        GameMutationResult result, PlayResult play, string code, CancellationToken cancellationToken)
+    {
+        if (result.Status is not GameMutationStatus.Success)
+        {
+            return Failure(result.Status, code);
+        }
+
+        var game = result.Game!;
+        await notifier.PlayedAsync(
+            game, game.FindPlayer(Sub)?.TeamId ?? string.Empty, play.BoroughId ?? string.Empty, play, cancellationToken);
+
+        return ToDto(game);
     }
 
     /// <summary>Reports whether a running steal came off. Must arrive before its clock runs out.</summary>
@@ -284,6 +347,8 @@ public class GamesController(
         game.FindPlayer(Sub)?.TeamId,
         game.DurationMinutes,
         game.HotRotationMinutes,
+        game.BoardSize,
+        engine.DefaultBoardSize(game.Teams.Count),
         game.PowerConfigurationId,
         game.PowerConfigurationName,
         BoardToDto(game),
@@ -337,6 +402,37 @@ public class GamesController(
                 .Select(offer => new PowerOfferDto(
                     offer.Id, offer.Reason, offer.Keep, offer.Cards.Select(ToPowerCardDto).ToList()))
                 .ToList() ?? [],
+            game.Curses
+                .Where(c => c.Status is CurseStatus.Active
+                    && yourTeamId is not null
+                    && (c.TargetTeamId == yourTeamId || c.FromTeamId == yourTeamId))
+                .Select(c => new CurseDto(
+                    c.Id,
+                    c.Title,
+                    c.Description,
+                    TeamName(game, c.FromTeamId),
+                    TeamName(game, c.TargetTeamId),
+                    c.TargetTeamId == yourTeamId,
+                    c.StartedAt,
+                    c.EndsAt,
+                    c.IsReversal))
+                .ToList(),
+            yourTeamId is null
+                ? []
+                : game.Powers
+                    .Where(p => p.TeamId != yourTeamId)
+                    .SelectMany(p => p.Cards
+                        .Where(c => c.Steal is { Outcome: null } steal
+                            && game.FindTeamHolding(steal.BoroughId)?.Id == yourTeamId)
+                        .Select(c => new IncomingStealDto(
+                            c.Id,
+                            c.Steal!.BoroughId,
+                            BoroughCatalogue.NameOf(c.Steal.BoroughId),
+                            TeamName(game, p.TeamId),
+                            c.Steal.Title,
+                            c.Steal.Summary,
+                            c.Steal.ExpiresAt)))
+                    .ToList(),
             options.Value.MaxPowerCards,
             game.PowerDeck?.DrawPile.Count ?? 0,
             game.PowerDeck?.DiscardPile.Count ?? 0,
@@ -356,7 +452,9 @@ public class GamesController(
         card.Kind.ToString(),
         card.Title,
         card.Description,
+        card.DurationMinutes,
         card.PlayedAt,
+        card.PlayedOn,
         card.Steal is { } steal
             ? new StealDto(
                 steal.BoroughId,
@@ -367,6 +465,9 @@ public class GamesController(
                 steal.ExpiresAt,
                 steal.Outcome?.ToString())
             : null);
+
+    private static string TeamName(Game game, string teamId) =>
+        game.FindTeam(teamId)?.Name ?? "another team";
 
     private ActionResult GameNotFound(string code) =>
         NotFound(new ProblemDetails
@@ -466,6 +567,30 @@ public class GamesController(
 
         GameMutationStatus.EmptyPowerDeck => Problem(
             title: "That power card configuration has no cards in it",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.RespondOnly => Problem(
+            title: "Use that card on a curse or steal aimed at you",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.CurseNotFound => Problem(
+            title: "That curse isn't on you any more",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.CannotReverse => Problem(
+            title: "That curse has already been reversed once — it can only be vetoed now",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotAResponse => Problem(
+            title: "That card can't be used on this",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.CurseIsTimed => Problem(
+            title: "That curse lifts on its own when its time is up",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.StealNotFound => Problem(
+            title: "That steal is already over, or isn't on one of your boroughs",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.PowerHandFull => Problem(

@@ -32,7 +32,7 @@ public class PowerCardsController(PowerCardStore store) : ControllerBase
         [FromBody] SavePowerCardRequest request, CancellationToken cancellationToken)
     {
         var (status, card) = await store.CreateAsync(
-            request.Kind, request.Title.Trim(), request.Description.Trim(), cancellationToken);
+            request.Kind, request.Title.Trim(), request.Description.Trim(), request.DurationMinutes, cancellationToken);
 
         return status is PowerCardMutationStatus.Success
             ? CreatedAtAction(nameof(Get), new { id = card!.Id }, ToDto(card))
@@ -44,7 +44,7 @@ public class PowerCardsController(PowerCardStore store) : ControllerBase
         string id, [FromBody] SavePowerCardRequest request, CancellationToken cancellationToken)
     {
         var (status, card) = await store.UpdateAsync(
-            id, request.Kind, request.Title.Trim(), request.Description.Trim(), cancellationToken);
+            id, request.Kind, request.Title.Trim(), request.Description.Trim(), request.DurationMinutes, cancellationToken);
 
         return status is PowerCardMutationStatus.Success ? ToDto(card!) : Failure(status);
     }
@@ -64,7 +64,7 @@ public class PowerCardsController(PowerCardStore store) : ControllerBase
         PowerCardMutationStatus.NotFound => NotFoundProblem(),
 
         PowerCardMutationStatus.BuiltIn => Problem(
-            title: "Steal is built in and can't be changed",
+            title: "That card is built in and can't be changed",
             statusCode: StatusCodes.Status403Forbidden),
 
         PowerCardMutationStatus.InvalidKind => Problem(
@@ -79,5 +79,6 @@ public class PowerCardsController(PowerCardStore store) : ControllerBase
         card.Kind.ToString(),
         card.Title,
         card.Description,
+        card.DurationMinutes,
         PowerCatalogue.BuiltIn.Any(b => b.Id == card.Id));
 }

@@ -13,6 +13,11 @@ public enum PlayEffect
     HotBoroughClaimed,
     BoroughStolen,
     StealFailed,
+    StealStarted,
+    StealVetoed,
+    CurseCast,
+    CurseVetoed,
+    CurseReversed,
 }
 
 /// <summary>
@@ -23,11 +28,13 @@ public enum PlayEffect
 /// whose caller has no borough of its own to notify about — a steal's target was chosen when the
 /// card was played, not on the request that resolves it.
 /// </summary>
+/// <param name="Detail">The curse's title, for effects about a curse.</param>
 public record PlayResult(
     GameMutationStatus Status,
     PlayEffect Effect = PlayEffect.Nothing,
     string? CounterpartTeamId = null,
-    string? BoroughId = null);
+    string? BoroughId = null,
+    string? Detail = null);
 
 /// <summary>
 /// The rules. Every method mutates the game in place and is called inside the store's version
@@ -81,13 +88,14 @@ public class GameEngine(IOptions<GamesOptions> options)
             return GameMutationStatus.EmptyPowerDeck;
         }
 
+        var boardSize = BoardSizeFor(game);
         var pool = BoroughCatalogue.All.Select(b => b.Id).OrderBy(_ => Random.Shared.Next()).ToList();
-        var active = pool.Take(_options.ActiveBoroughCount).ToList();
+        var active = pool.Take(boardSize).ToList();
 
         game.Board = new GameBoard
         {
             Active = active.Select(id => new ActiveBorough { BoroughId = id }).ToList(),
-            Remaining = pool.Skip(_options.ActiveBoroughCount).ToList(),
+            Remaining = pool.Skip(boardSize).ToList(),
             HotBoroughId = active[Random.Shared.Next(active.Count)],
             HotRotatesAt = now.AddMinutes(game.HotRotationMinutes),
         };
@@ -107,6 +115,13 @@ public class GameEngine(IOptions<GamesOptions> options)
 
         return GameMutationStatus.Success;
     }
+
+    /// <summary>The host's choice if they made one, otherwise a few more than there are teams.</summary>
+    public int BoardSizeFor(Game game) =>
+        Math.Clamp(game.BoardSize ?? DefaultBoardSize(game.Teams.Count), _options.MinBoardSize, _options.MaxBoardSize);
+
+    public int DefaultBoardSize(int teamCount) =>
+        Math.Clamp(teamCount + _options.BoardSizeOverTeams, _options.MinBoardSize, _options.MaxBoardSize);
 
     /// <summary>
     /// Brings deadlines up to date: steals whose clock ran out fail, the hot borough moves on,
@@ -130,7 +145,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             return true;
         }
 
-        var changed = TimeOutSteals(game, now);
+        var changed = TimeOutSteals(game, now) | ExpireCurses(game, now);
 
         // The hot borough must always be one of the active — unclaimed by definition — so it also
         // moves the moment the borough it was sitting on is claimed out from under it. With no hot
@@ -277,58 +292,220 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>
-    /// Plays a power card. A curse is only marked as played — the team tells its target over the
-    /// group chat. A steal needs a borough another team holds: the target is committed first,
-    /// then a steal challenge is revealed and its countdown starts. Neither can be taken back.
+    /// Plays a power card. A curse needs a target team and lands on them at once; a boost is only
+    /// marked as played. A steal needs a borough another team holds: the target is committed
+    /// first, then a steal challenge is revealed and its countdown starts. Veto and Curse Reverse
+    /// can't be played on their own — they're used from the curse or steal they answer. Nothing
+    /// played can be taken back.
     /// </summary>
-    public GameMutationStatus PlayPower(
-        Game game, string teamId, string cardId, string? boroughId, IReadOnlyList<Challenge> deck, DateTimeOffset now)
+    public PlayResult PlayPower(
+        Game game,
+        string teamId,
+        string cardId,
+        string? boroughId,
+        string? targetTeamId,
+        IReadOnlyList<Challenge> deck,
+        DateTimeOffset now)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return new PlayResult(GameMutationStatus.GameNotRunning);
+        }
+
+        var card = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == cardId);
+        if (card is null)
+        {
+            return new PlayResult(GameMutationStatus.CardNotInHand);
+        }
+
+        if (card.IsPlayed)
+        {
+            return new PlayResult(GameMutationStatus.AlreadyPlayed);
+        }
+
+        switch (card.Kind)
+        {
+            case PowerKind.Veto or PowerKind.Reverse:
+                return new PlayResult(GameMutationStatus.RespondOnly);
+
+            case PowerKind.Curse:
+            {
+                var target = targetTeamId is null ? null : game.FindTeam(targetTeamId);
+                if (target is null || target.Id == teamId)
+                {
+                    return new PlayResult(GameMutationStatus.InvalidTarget);
+                }
+
+                game.Curses.Add(new ActiveCurse
+                {
+                    Id = Guid.NewGuid().ToString("n"),
+                    Title = card.Title,
+                    Description = card.Description,
+                    FromTeamId = teamId,
+                    TargetTeamId = target.Id,
+                    StartedAt = now,
+                    DurationMinutes = card.DurationMinutes,
+                });
+
+                card.PlayedAt = now;
+                card.PlayedOn = target.Name;
+                return new PlayResult(GameMutationStatus.Success, PlayEffect.CurseCast, target.Id, Detail: card.Title);
+            }
+
+            case PowerKind.Steal:
+            {
+                var holder = boroughId is null ? null : game.FindTeamHolding(boroughId);
+                if (holder is null || holder.Id == teamId)
+                {
+                    return new PlayResult(GameMutationStatus.InvalidTarget);
+                }
+
+                var steals = deck.Where(c => c.Type is ChallengeType.Steal).ToList();
+                if (steals.Count == 0)
+                {
+                    return new PlayResult(GameMutationStatus.NotEnoughChallenges);
+                }
+
+                var challenge = steals[Random.Shared.Next(steals.Count)];
+                card.Steal = new StealAttempt
+                {
+                    BoroughId = boroughId!,
+                    ChallengeId = challenge.Id,
+                    Title = challenge.Title,
+                    Summary = challenge.Summary,
+                    FurtherDetails = challenge.FurtherDetails,
+                    ExpiresAt = now.AddMinutes(challenge.EffectiveStealMinutes),
+                    PowerDraws = challenge.EffectivePowerDraws,
+                };
+
+                card.PlayedAt = now;
+                card.PlayedOn = BoroughCatalogue.NameOf(boroughId!);
+                return new PlayResult(GameMutationStatus.Success, PlayEffect.StealStarted, holder.Id, boroughId);
+            }
+
+            default:
+                card.PlayedAt = now;
+                return new PlayResult(GameMutationStatus.Success);
+        }
+    }
+
+    /// <summary>
+    /// Uses a Veto or Curse Reverse on an active curse aimed at the team. A Veto cancels it. A
+    /// Reverse ends it and casts it afresh on whoever sent it, with its full time again — unless
+    /// it is itself a reversal, which can't be sent back a second time.
+    /// </summary>
+    public PlayResult RespondToCurse(Game game, string teamId, string curseId, string cardId, DateTimeOffset now)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return new PlayResult(GameMutationStatus.GameNotRunning);
+        }
+
+        var curse = game.Curses.FirstOrDefault(
+            c => c.Id == curseId && c.TargetTeamId == teamId && c.Status is CurseStatus.Active);
+        if (curse is null)
+        {
+            return new PlayResult(GameMutationStatus.CurseNotFound);
+        }
+
+        var card = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == cardId && !c.IsPlayed);
+        if (card is not { Kind: PowerKind.Veto or PowerKind.Reverse })
+        {
+            return new PlayResult(GameMutationStatus.NotAResponse);
+        }
+
+        if (card.Kind is PowerKind.Reverse && curse.IsReversal)
+        {
+            return new PlayResult(GameMutationStatus.CannotReverse);
+        }
+
+        curse.ResolvedAt = now;
+        card.PlayedAt = now;
+        card.PlayedOn = curse.Title;
+
+        if (card.Kind is PowerKind.Veto)
+        {
+            curse.Status = CurseStatus.Vetoed;
+            return new PlayResult(GameMutationStatus.Success, PlayEffect.CurseVetoed, curse.FromTeamId, Detail: curse.Title);
+        }
+
+        curse.Status = CurseStatus.Reversed;
+        game.Curses.Add(new ActiveCurse
+        {
+            Id = Guid.NewGuid().ToString("n"),
+            Title = curse.Title,
+            Description = curse.Description,
+            FromTeamId = teamId,
+            TargetTeamId = curse.FromTeamId,
+            StartedAt = now,
+            DurationMinutes = curse.DurationMinutes,
+            IsReversal = true,
+        });
+
+        return new PlayResult(GameMutationStatus.Success, PlayEffect.CurseReversed, curse.FromTeamId, Detail: curse.Title);
+    }
+
+    /// <summary>
+    /// The cursed team marking a curse done. Only for one with no time on it — a timed curse
+    /// lifts on its own, and clearing it early would just be cheating.
+    /// </summary>
+    public GameMutationStatus ClearCurse(Game game, string teamId, string curseId, DateTimeOffset now)
     {
         if (game.Status is not GameStatus.InProgress)
         {
             return GameMutationStatus.GameNotRunning;
         }
 
-        var card = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == cardId);
-        if (card is null)
+        var curse = game.Curses.FirstOrDefault(
+            c => c.Id == curseId && c.TargetTeamId == teamId && c.Status is CurseStatus.Active);
+        if (curse is null)
         {
-            return GameMutationStatus.CardNotInHand;
+            return GameMutationStatus.CurseNotFound;
         }
 
-        if (card.IsPlayed)
+        if (curse.DurationMinutes is not null)
         {
-            return GameMutationStatus.AlreadyPlayed;
+            return GameMutationStatus.CurseIsTimed;
         }
 
-        if (card.Kind is PowerKind.Steal)
-        {
-            var holder = boroughId is null ? null : game.FindTeamHolding(boroughId);
-            if (holder is null || holder.Id == teamId)
-            {
-                return GameMutationStatus.InvalidTarget;
-            }
-
-            var steals = deck.Where(c => c.Type is ChallengeType.Steal).ToList();
-            if (steals.Count == 0)
-            {
-                return GameMutationStatus.NotEnoughChallenges;
-            }
-
-            var challenge = steals[Random.Shared.Next(steals.Count)];
-            card.Steal = new StealAttempt
-            {
-                BoroughId = boroughId!,
-                ChallengeId = challenge.Id,
-                Title = challenge.Title,
-                Summary = challenge.Summary,
-                FurtherDetails = challenge.FurtherDetails,
-                ExpiresAt = now.AddMinutes(challenge.EffectiveStealMinutes),
-                PowerDraws = challenge.EffectivePowerDraws,
-            };
-        }
-
-        card.PlayedAt = now;
+        curse.Status = CurseStatus.Cleared;
+        curse.ResolvedAt = now;
         return GameMutationStatus.Success;
+    }
+
+    /// <summary>
+    /// Uses a Veto on a running steal against a borough the team holds. Nothing moves and nobody
+    /// draws; the stealing team's card is spent all the same.
+    /// </summary>
+    public PlayResult VetoSteal(Game game, string teamId, string stealCardId, string vetoCardId, DateTimeOffset now)
+    {
+        if (game.Status is not GameStatus.InProgress)
+        {
+            return new PlayResult(GameMutationStatus.GameNotRunning);
+        }
+
+        var (stealingTeamId, steal) = game.Powers
+            .SelectMany(p => p.Cards.Select(c => (p.TeamId, c)))
+            .Where(x => x.c.Id == stealCardId && x.c.Steal is { Outcome: null })
+            .Select(x => (x.TeamId, x.c.Steal))
+            .FirstOrDefault();
+
+        if (steal is null || game.FindTeamHolding(steal.BoroughId)?.Id != teamId)
+        {
+            return new PlayResult(GameMutationStatus.StealNotFound);
+        }
+
+        var veto = game.FindPowers(teamId)?.Cards.FirstOrDefault(c => c.Id == vetoCardId && !c.IsPlayed);
+        if (veto is not { Kind: PowerKind.Veto })
+        {
+            return new PlayResult(GameMutationStatus.NotAResponse);
+        }
+
+        steal.Outcome = StealOutcome.Vetoed;
+        veto.PlayedAt = now;
+        veto.PlayedOn = $"the steal on {BoroughCatalogue.NameOf(steal.BoroughId)}";
+
+        return new PlayResult(GameMutationStatus.Success, PlayEffect.StealVetoed, stealingTeamId, steal.BoroughId);
     }
 
     /// <summary>
@@ -426,6 +603,24 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         return wasHot ? PlayEffect.HotBoroughClaimed : PlayEffect.BoroughClaimed;
+    }
+
+    /// <summary>Lifts every timed curse whose time is up.</summary>
+    private static bool ExpireCurses(Game game, DateTimeOffset now)
+    {
+        var changed = false;
+
+        foreach (var curse in game.Curses)
+        {
+            if (curse.Status is CurseStatus.Active && curse.EndsAt is { } endsAt && now >= endsAt)
+            {
+                curse.Status = CurseStatus.Expired;
+                curse.ResolvedAt = endsAt;
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     /// <summary>Fails every running steal whose clock has run out.</summary>
@@ -620,5 +815,6 @@ public class GameEngine(IOptions<GamesOptions> options)
         Kind = power.Kind,
         Title = power.Title,
         Description = power.Description,
+        DurationMinutes = power.Kind is PowerKind.Curse ? power.DurationMinutes : null,
     };
 }

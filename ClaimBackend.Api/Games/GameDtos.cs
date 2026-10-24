@@ -17,6 +17,8 @@ public record GameDto(
     string? YourTeamId,
     int DurationMinutes,
     int HotRotationMinutes,
+    int? BoardSize,
+    int DefaultBoardSize,
     string? PowerConfigurationId,
     string? PowerConfigurationName,
     GameBoardDto? Board,
@@ -42,6 +44,9 @@ public record SetDurationRequest(
     [Range(1, 24 * 60)] int DurationMinutes);
 
 public record SetPowerConfigurationRequest([Required] string ConfigurationId);
+
+/// <summary>Null leaves it to the game: a few more boroughs than there are teams.</summary>
+public record SetBoardSizeRequest([Range(4, 10)] int? BoardSize);
 
 /// <summary>How long the hot borough stands before moving on its own.</summary>
 public record SetHotRotationRequest(
@@ -78,13 +83,42 @@ public record StealDto(
 /// A power card. Played ones stay in the list, marked by <paramref name="PlayedAt"/>, so the team
 /// can see what they have used.
 /// </summary>
+/// <param name="DurationMinutes">Curse only; null lasts until the cursed team clears it.</param>
+/// <param name="PlayedOn">What it was played on — a team, a borough, a curse.</param>
 public record PowerCardDto(
     string Id,
     string Kind,
     string Title,
     string Description,
+    int? DurationMinutes,
     DateTimeOffset? PlayedAt,
+    string? PlayedOn,
     StealDto? Steal);
+
+/// <summary>
+/// An active curse the caller's team cast or is suffering. <paramref name="OnYou"/> says which.
+/// <paramref name="EndsAt"/> is null for one that lasts until cleared.
+/// </summary>
+public record CurseDto(
+    string Id,
+    string Title,
+    string Description,
+    string FromTeamName,
+    string TargetTeamName,
+    bool OnYou,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? EndsAt,
+    bool IsReversal);
+
+/// <summary>A steal running against one of the caller's team's boroughs — the thing a Veto can stop.</summary>
+public record IncomingStealDto(
+    string Id,
+    string BoroughId,
+    string BoroughName,
+    string FromTeamName,
+    string Title,
+    string Summary,
+    DateTimeOffset ExpiresAt);
 
 /// <summary>Cards drawn and waiting for the team to keep up to <paramref name="Keep"/> of them.</summary>
 public record PowerOfferDto(string Id, string Reason, int Keep, IReadOnlyList<PowerCardDto> Cards);
@@ -105,6 +139,8 @@ public record GameBoardDto(
     IReadOnlyList<HandCardDto> YourHand,
     IReadOnlyList<PowerCardDto> YourPowers,
     IReadOnlyList<PowerOfferDto> YourPowerOffers,
+    IReadOnlyList<CurseDto> ActiveCurses,
+    IReadOnlyList<IncomingStealDto> IncomingSteals,
     int MaxPowerCards,
     int PowerDeckCount,
     int PowerDiscardCount,
@@ -119,7 +155,13 @@ public record PlayCardRequest(
 /// <summary>The ids of the offered cards to keep. Empty turns the whole offer down.</summary>
 public record KeepPowersRequest([Required] IReadOnlyList<string> CardIds);
 
-/// <summary><paramref name="BoroughId"/> is the target, and is required for a Steal only.</summary>
-public record PlayPowerRequest(string? BoroughId);
+/// <summary>
+/// A Steal needs <paramref name="BoroughId"/>, a curse <paramref name="TargetTeamId"/>; a boost
+/// needs neither.
+/// </summary>
+public record PlayPowerRequest(string? BoroughId, string? TargetTeamId);
+
+/// <summary>The Veto or Curse Reverse to use.</summary>
+public record RespondRequest([Required] string CardId);
 
 public record ResolveStealRequest(bool Succeeded);

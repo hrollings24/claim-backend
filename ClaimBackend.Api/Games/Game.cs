@@ -58,6 +58,9 @@ public class Game
     /// <summary>Power cards held and waiting to be chosen, per team.</summary>
     public required List<TeamPowers> Powers { get; init; }
 
+    /// <summary>Every curse cast this game, active or not, oldest first.</summary>
+    public required List<ActiveCurse> Curses { get; init; }
+
     /// <summary>The power card configuration the host picked in the lobby. A game can't start without one.</summary>
     public string? PowerConfigurationId { get; set; }
 
@@ -98,6 +101,12 @@ public class Game
     /// lobby. It also moves the moment it is claimed, regardless of this value.
     /// </summary>
     public required int HotRotationMinutes { get; set; }
+
+    /// <summary>
+    /// Boroughs on the board, picked by the host in the lobby. Null leaves it to the game, which
+    /// sizes it to the number of teams when it starts — see <see cref="GameEngine.BoardSizeFor"/>.
+    /// </summary>
+    public int? BoardSize { get; set; }
 
     /// <summary>
     /// Incremented on every write and used as the condition on the next one, so two players

@@ -36,6 +36,12 @@ public enum GameMutationStatus
     NoPowerConfiguration,
     PowerConfigurationNotFound,
     EmptyPowerDeck,
+    RespondOnly,
+    CurseNotFound,
+    CannotReverse,
+    NotAResponse,
+    CurseIsTimed,
+    StealNotFound,
 }
 
 public record GameMutationResult(GameMutationStatus Status, Game? Game);
@@ -206,6 +212,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 Teams = [],
                 Hands = [],
                 Powers = [],
+                Curses = [],
             };
 
             try
@@ -380,15 +387,36 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
     /// Plays a power card. For a steal this commits the target, reveals the challenge and starts
     /// the countdown.
     /// </summary>
-    public Task<GameMutationResult> PlayPowerAsync(
+    public Task<(GameMutationResult Result, PlayResult Play)> PlayPowerAsync(
         string code,
         string sub,
         string cardId,
         string? boroughId,
+        string? targetTeamId,
         IReadOnlyList<Challenge> deck,
         CancellationToken cancellationToken) =>
         MutateAsTeamAsync(code, sub, (game, teamId) =>
-            engine.PlayPower(game, teamId, cardId, boroughId, deck, DateTimeOffset.UtcNow),
+            engine.PlayPower(game, teamId, cardId, boroughId, targetTeamId, deck, DateTimeOffset.UtcNow),
+            cancellationToken);
+
+    /// <summary>Uses a Veto or Curse Reverse on a curse aimed at the caller's team.</summary>
+    public Task<(GameMutationResult Result, PlayResult Play)> RespondToCurseAsync(
+        string code, string sub, string curseId, string cardId, CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) =>
+            engine.RespondToCurse(game, teamId, curseId, cardId, DateTimeOffset.UtcNow),
+            cancellationToken);
+
+    public Task<GameMutationResult> ClearCurseAsync(
+        string code, string sub, string curseId, CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) =>
+            engine.ClearCurse(game, teamId, curseId, DateTimeOffset.UtcNow),
+            cancellationToken);
+
+    /// <summary>Uses a Veto on a running steal against one of the caller's team's boroughs.</summary>
+    public Task<(GameMutationResult Result, PlayResult Play)> VetoStealAsync(
+        string code, string sub, string stealCardId, string vetoCardId, CancellationToken cancellationToken) =>
+        MutateAsTeamAsync(code, sub, (game, teamId) =>
+            engine.VetoSteal(game, teamId, stealCardId, vetoCardId, DateTimeOffset.UtcNow),
             cancellationToken);
 
     /// <summary>Reports the outcome of a steal already played against its target.</summary>
@@ -457,6 +485,25 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             }
 
             game.DurationMinutes = durationMinutes;
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>Null hands the size back to the game, which fits it to the teams when it starts.</summary>
+    public Task<GameMutationResult> SetBoardSizeAsync(
+        string code, string sub, int? boardSize, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            if (!game.IsHost(sub))
+            {
+                return GameMutationStatus.NotHost;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            game.BoardSize = boardSize;
             return GameMutationStatus.Success;
         }, cancellationToken);
 
@@ -686,6 +733,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         ["Version"] = Number(game.Version),
         ["DurationMinutes"] = Number(game.DurationMinutes),
         ["HotRotationMinutes"] = Number(game.HotRotationMinutes),
+        ["BoardSize"] = game.BoardSize is { } boardSize ? Number(boardSize) : new AttributeValue { NULL = true },
         // Measured from this write rather than from creation, so every action pushes the expiry
         // out and only genuinely idle lobbies age away. Basing it on CreatedAt would delete a
         // game mid-play once it had been running for the TTL — reachable now that a game can be
@@ -701,6 +749,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         ["Hands"] = Json(game.Hands),
         ["Powers"] = Json(game.Powers),
         ["PowerDeck"] = Json(game.PowerDeck),
+        ["Curses"] = Json(game.Curses),
         ["PowerConfigurationId"] = OptionalAttribute(game.PowerConfigurationId),
         ["PowerConfigurationName"] = OptionalAttribute(game.PowerConfigurationName),
         ["StartedAt"] = OptionalTimestamp(game.StartedAt),
@@ -738,6 +787,9 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         HotRotationMinutes = item.TryGetValue("HotRotationMinutes", out var hotRotation)
             ? int.Parse(hotRotation.N, CultureInfo.InvariantCulture)
             : 90,
+        BoardSize = item.TryGetValue("BoardSize", out var boardSize) && boardSize.N is { } size
+            ? int.Parse(size, CultureInfo.InvariantCulture)
+            : null,
         Players = PlayersFromAttribute(item["Players"]),
         // Games written before players could come back have no FormerPlayers attribute at all.
         FormerPlayers = item.TryGetValue("FormerPlayers", out var formerPlayers)
@@ -761,6 +813,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         Hands = FromJson<List<TeamHand>>(item, "Hands") ?? [],
         Powers = FromJson<List<TeamPowers>>(item, "Powers") ?? [],
         PowerDeck = FromJson<PowerDeck>(item, "PowerDeck"),
+        Curses = FromJson<List<ActiveCurse>>(item, "Curses") ?? [],
         PowerConfigurationId = OptionalString(item, "PowerConfigurationId"),
         PowerConfigurationName = OptionalString(item, "PowerConfigurationName"),
         StartedAt = OptionalDate(item, "StartedAt"),

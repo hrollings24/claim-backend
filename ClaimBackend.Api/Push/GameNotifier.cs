@@ -41,6 +41,47 @@ public class GameNotifier(PushSender sender)
                     Url(game)),
                 cancellationToken),
 
+            // Without this the defender wouldn't know to reach for a Veto in time.
+            PlayEffect.StealStarted => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} is stealing {borough}",
+                    "They're on the clock. Veto it if you can.",
+                    Url(game)),
+                cancellationToken),
+
+            PlayEffect.StealVetoed => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} vetoed your steal on {borough}",
+                    "Nothing moves — that Steal is spent.",
+                    Url(game)),
+                cancellationToken),
+
+            PlayEffect.CurseCast => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} cursed you: {play.Detail}",
+                    "It's on you now. Open the app to see it — or veto or reverse it.",
+                    Url(game)),
+                cancellationToken),
+
+            PlayEffect.CurseVetoed => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} vetoed your curse",
+                    $"{play.Detail} is off them.",
+                    Url(game)),
+                cancellationToken),
+
+            PlayEffect.CurseReversed => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} reversed your curse",
+                    $"{play.Detail} is on you now.",
+                    Url(game)),
+                cancellationToken),
+
             PlayEffect.StealFailed => sender.SendAsync(
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
@@ -58,7 +99,7 @@ public class GameNotifier(PushSender sender)
             Everyone(game),
             new PushNotification(
                 "The game has started",
-                "Six boroughs are up for grabs. One of them is hot.",
+                $"{game.Board?.Active.Count ?? 0} boroughs are up for grabs. One of them is hot.",
                 Url(game)),
             cancellationToken);
 

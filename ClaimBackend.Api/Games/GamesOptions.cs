@@ -35,8 +35,16 @@ public class GamesOptions
     /// <summary>Starting length for a new game, in minutes. The host can change it in the lobby.</summary>
     public int DefaultDurationMinutes { get; set; } = 60;
 
-    /// <summary>Boroughs on offer at any moment.</summary>
-    public int ActiveBoroughCount { get; set; } = 6;
+    /// <summary>
+    /// Bounds on how many boroughs are on offer at any moment. The host picks within them; left
+    /// to itself a game puts <see cref="BoardSizeOverTeams"/> more than it has teams on the board,
+    /// so every team has about the same amount of choice however many are playing.
+    /// </summary>
+    public int MinBoardSize { get; set; } = 4;
+
+    public int MaxBoardSize { get; set; } = 10;
+
+    public int BoardSizeOverTeams { get; set; } = 4;
 
     public int HandSize { get; set; } = 5;
 

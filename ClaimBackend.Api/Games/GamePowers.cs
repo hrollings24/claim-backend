@@ -10,6 +10,53 @@ public enum StealOutcome
 
     /// <summary>The clock ran out before anyone entered a result. Counts as a failure.</summary>
     TimedOut,
+
+    /// <summary>The defending team used a Veto. Nothing moves, and nobody draws.</summary>
+    Vetoed,
+}
+
+public enum CurseStatus
+{
+    Active,
+
+    /// <summary>The cursed team marked it done — only possible for a curse with no time on it.</summary>
+    Cleared,
+
+    /// <summary>A timed curse whose time ran out.</summary>
+    Expired,
+
+    Vetoed,
+
+    /// <summary>Sent back; the curse now on the original caster is a separate one.</summary>
+    Reversed,
+}
+
+/// <summary>
+/// A curse one team has cast on another. Kept on the game rather than the card, because both
+/// teams need to see it. It lands the moment it's cast: a Veto or Curse Reverse is never applied
+/// for the team — they choose to use one on it, while it's active.
+/// </summary>
+public class ActiveCurse
+{
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    public required string Description { get; init; }
+    public required string FromTeamId { get; init; }
+    public required string TargetTeamId { get; init; }
+    public required DateTimeOffset StartedAt { get; init; }
+
+    /// <summary>Null for a curse with no time on it, which lasts until the cursed team clears it.</summary>
+    public int? DurationMinutes { get; init; }
+
+    [JsonIgnore]
+    public DateTimeOffset? EndsAt => DurationMinutes is { } minutes ? StartedAt.AddMinutes(minutes) : null;
+
+    /// <summary>A curse sent back by Curse Reverse. It can be vetoed, but not reversed again.</summary>
+    public bool IsReversal { get; init; }
+
+    public CurseStatus Status { get; set; } = CurseStatus.Active;
+
+    public DateTimeOffset? ResolvedAt { get; set; }
 }
 
 /// <summary>
@@ -45,7 +92,13 @@ public class PowerCard
     public required string Title { get; init; }
     public required string Description { get; init; }
 
+    /// <summary>Curse only, copied from its definition when drawn.</summary>
+    public int? DurationMinutes { get; init; }
+
     public DateTimeOffset? PlayedAt { get; set; }
+
+    /// <summary>What it was played on, for the team's list of played cards — "Team B", "Camden".</summary>
+    public string? PlayedOn { get; set; }
 
     /// <summary>Steal only, set when it is played.</summary>
     public StealAttempt? Steal { get; set; }

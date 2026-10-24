@@ -36,11 +36,17 @@ public record SavePowerConfigurationRequest(
     [Required, StringLength(40, MinimumLength = 1)] string Name,
     [Required] Dictionary<string, int> Counts);
 
-/// <param name="IsBuiltIn">Steal: it has rules behind it, so nobody can edit or delete it.</param>
-public record PowerCardDefinitionDto(string Id, string Kind, string Title, string Description, bool IsBuiltIn);
+/// <param name="IsBuiltIn">Steal, Veto and Curse Reverse have rules behind them, so nobody can edit or delete them.</param>
+/// <param name="DurationMinutes">Curse only: how long it lasts. Null lasts until the cursed team clears it.</param>
+public record PowerCardDefinitionDto(
+    string Id, string Kind, string Title, string Description, int? DurationMinutes, bool IsBuiltIn);
 
-/// <summary><paramref name="Kind"/> is Curse or Boost — there is only ever the one Steal.</summary>
+/// <summary>
+/// <paramref name="Kind"/> is Curse or Boost — the others are built in.
+/// <paramref name="DurationMinutes"/> is kept for a curse only.
+/// </summary>
 public record SavePowerCardRequest(
     [Required] PowerKind Kind,
     [Required, StringLength(60, MinimumLength = 1)] string Title,
-    [Required, StringLength(500, MinimumLength = 1)] string Description);
+    [Required, StringLength(500, MinimumLength = 1)] string Description,
+    [Range(1, 240)] int? DurationMinutes);

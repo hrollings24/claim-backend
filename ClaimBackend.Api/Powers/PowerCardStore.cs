@@ -1,3 +1,4 @@
+using System.Globalization;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using ClaimBackend.Api.Challenges;
@@ -54,15 +55,17 @@ public class PowerCardStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
     public async Task<PowerDefinition?> FindAsync(string id, CancellationToken cancellationToken) =>
         (await ListAsync(cancellationToken)).FirstOrDefault(c => c.Id == id);
 
+    /// <param name="durationMinutes">Kept for a curse only; a boost has nothing to time.</param>
     public async Task<(PowerCardMutationStatus Status, PowerDefinition? Card)> CreateAsync(
-        PowerKind kind, string title, string description, CancellationToken cancellationToken)
+        PowerKind kind, string title, string description, int? durationMinutes, CancellationToken cancellationToken)
     {
-        if (kind is PowerKind.Steal)
+        if (!IsWritable(kind))
         {
             return (PowerCardMutationStatus.InvalidKind, null);
         }
 
-        var card = new PowerDefinition(Guid.NewGuid().ToString("n"), kind, title, description);
+        var card = new PowerDefinition(
+            Guid.NewGuid().ToString("n"), kind, title, description, DurationFor(kind, durationMinutes));
         await PutAsync(card, SortKeyFor(card.Id, DateTimeOffset.UtcNow), cancellationToken);
 
         return (PowerCardMutationStatus.Success, card);
@@ -70,14 +73,19 @@ public class PowerCardStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
 
     /// <summary>Anyone may edit any card. Last write wins, same as configurations.</summary>
     public async Task<(PowerCardMutationStatus Status, PowerDefinition? Card)> UpdateAsync(
-        string id, PowerKind kind, string title, string description, CancellationToken cancellationToken)
+        string id,
+        PowerKind kind,
+        string title,
+        string description,
+        int? durationMinutes,
+        CancellationToken cancellationToken)
     {
         if (PowerCatalogue.BuiltIn.Any(c => c.Id == id))
         {
             return (PowerCardMutationStatus.BuiltIn, null);
         }
 
-        if (kind is PowerKind.Steal)
+        if (!IsWritable(kind))
         {
             return (PowerCardMutationStatus.InvalidKind, null);
         }
@@ -87,7 +95,7 @@ public class PowerCardStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
             return (PowerCardMutationStatus.NotFound, null);
         }
 
-        var card = new PowerDefinition(id, kind, title, description);
+        var card = new PowerDefinition(id, kind, title, description, DurationFor(kind, durationMinutes));
         await PutAsync(card, sortKey, cancellationToken);
 
         return (PowerCardMutationStatus.Success, card);
@@ -180,6 +188,12 @@ public class PowerCardStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         (await QueryAllAsync(cancellationToken))
             .FirstOrDefault(item => !IsMarker(item) && item["Id"].S == id)?[SortAttribute].S;
 
+    /// <summary>Only honour-system cards can be written; the rest have rules and are built in.</summary>
+    private static bool IsWritable(PowerKind kind) => kind is PowerKind.Curse or PowerKind.Boost;
+
+    private static int? DurationFor(PowerKind kind, int? durationMinutes) =>
+        kind is PowerKind.Curse ? durationMinutes : null;
+
     private static bool IsMarker(Dictionary<string, AttributeValue> item) =>
         item[SortAttribute].S == SeededMarker;
 
@@ -199,6 +213,11 @@ public class PowerCardStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         item["Title"] = new AttributeValue(card.Title);
         item["Description"] = new AttributeValue(card.Description);
 
+        if (card.DurationMinutes is { } minutes)
+        {
+            item["DurationMinutes"] = new AttributeValue { N = minutes.ToString(CultureInfo.InvariantCulture) };
+        }
+
         return dynamo.PutItemAsync(new PutItemRequest { TableName = _options.TableName, Item = item }, cancellationToken);
     }
 
@@ -207,5 +226,8 @@ public class PowerCardStore(IAmazonDynamoDB dynamo, IOptions<ChallengesOptions> 
         item["Id"].S,
         Enum.Parse<PowerKind>(item["CardKind"].S),
         item["Title"].S,
-        item["Description"].S);
+        item["Description"].S,
+        item.TryGetValue("DurationMinutes", out var minutes) && minutes.N is { } n
+            ? int.Parse(n, CultureInfo.InvariantCulture)
+            : null);
 }
