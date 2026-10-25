@@ -38,11 +38,15 @@ public class GamesOptions
     /// <summary>
     /// Bounds on how many boroughs are on offer at any moment. The host picks within them; left
     /// to itself a game puts <see cref="BoardSizeOverTeams"/> more than it has teams on the board,
-    /// so every team has about the same amount of choice however many are playing.
+    /// so every team has about the same amount of choice however many are playing — never more
+    /// than <see cref="MaxAutomaticBoardSize"/>. Bigger boards cut travel, and so let teams
+    /// claim more in a day, but they're a choice for the host rather than the default.
     /// </summary>
     public int MinBoardSize { get; set; } = 4;
 
-    public int MaxBoardSize { get; set; } = 10;
+    public int MaxBoardSize { get; set; } = 16;
+
+    public int MaxAutomaticBoardSize { get; set; } = 10;
 
     public int BoardSizeOverTeams { get; set; } = 4;
 

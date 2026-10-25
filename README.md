@@ -78,8 +78,8 @@ table under their own `POWER_CONFIG` partition, so they need no extra infrastruc
 | PUT    | `/api/power-configurations/{id}`       | Same body; replaces the name and all counts         |
 | POST   | `/api/games/{code}/power-configuration` | Host only, in the lobby: `{ configurationId }`     |
 
-The board holds a few more boroughs than there are teams (teams + 4, between 4 and 10) unless
-the host picks a size in the lobby.
+The board holds a few more boroughs than there are teams (teams + 4, at most 10) unless the host
+picks a size from 4 to 16 in the lobby.
 
 A **curse** is cast on a team, who are notified and see it in the app. It can have a duration,
 after which it lifts on its own; without one it lasts until the cursed team marks it cleared.
@@ -107,7 +107,7 @@ bouncing back and forth. A borough is hot at most once per game.
 | POST   | `/api/games/{code}/curses/{curseId}/respond`    | `{ cardId }` — a Curse Reverse               |
 | POST   | `/api/games/{code}/curses/{curseId}/clear`      | Untimed curses only, by the cursed team      |
 | POST   | `/api/games/{code}/powers/{cardId}/swap`        | `{ takeCardId, giveCardId }` — finishes a Swap |
-| POST   | `/api/games/{code}/board-size`                  | Host only, lobby: `{ boardSize }`, null = auto |
+| POST   | `/api/games/{code}/board-size`                  | Host only, lobby: `{ boardSize }` 4–16, null = auto |
 
 Codes come from a 32-character alphabet with `I`, `O`, `0` and `1` left out, since they get read
 aloud and typed by hand.

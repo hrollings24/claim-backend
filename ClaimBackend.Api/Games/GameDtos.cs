@@ -46,7 +46,7 @@ public record SetDurationRequest(
 public record SetPowerConfigurationRequest([Required] string ConfigurationId);
 
 /// <summary>Null leaves it to the game: a few more boroughs than there are teams.</summary>
-public record SetBoardSizeRequest([Range(4, 10)] int? BoardSize);
+public record SetBoardSizeRequest([Range(4, 16)] int? BoardSize);
 
 /// <summary>How long the hot borough stands before moving on its own.</summary>
 public record SetHotRotationRequest(

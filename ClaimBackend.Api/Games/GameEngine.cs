@@ -122,7 +122,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         Math.Clamp(game.BoardSize ?? DefaultBoardSize(game.Teams.Count), _options.MinBoardSize, _options.MaxBoardSize);
 
     public int DefaultBoardSize(int teamCount) =>
-        Math.Clamp(teamCount + _options.BoardSizeOverTeams, _options.MinBoardSize, _options.MaxBoardSize);
+        Math.Clamp(teamCount + _options.BoardSizeOverTeams, _options.MinBoardSize, _options.MaxAutomaticBoardSize);
 
     /// <summary>
     /// Brings deadlines up to date: steals whose clock ran out fail, the hot borough moves on,
