@@ -81,17 +81,26 @@ public class PushSender(
             return;
         }
 
-        var client = new PushServiceClient(httpClientFactory.CreateClient(nameof(PushSender)))
+        // Belt and braces: whatever goes wrong in here, the move that triggered it has already
+        // happened, and must not come back to the player as an error.
+        try
         {
-            DefaultAuthentication = new VapidAuthentication(_options.PublicKey, _options.PrivateKey)
+            var client = new PushServiceClient(httpClientFactory.CreateClient(nameof(PushSender)))
             {
-                Subject = _options.Subject,
-            },
-        };
+                DefaultAuthentication = new VapidAuthentication(_options.PublicKey, _options.PrivateKey)
+                {
+                    Subject = _options.Subject,
+                },
+            };
 
-        var message = new PushMessage(JsonSerializer.Serialize(notification, JsonOptions));
+            var message = new PushMessage(JsonSerializer.Serialize(notification, JsonOptions));
 
-        await Task.WhenAll(subscriptions.Select(s => DeliverAsync(client, s, message, cancellationToken)));
+            await Task.WhenAll(subscriptions.Select(s => DeliverAsync(client, s, message, cancellationToken)));
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Could not send push notifications.");
+        }
     }
 
     private async Task DeliverAsync(
@@ -100,18 +109,20 @@ public class PushSender(
         PushMessage message,
         CancellationToken cancellationToken)
     {
-        var target = new Lib.Net.Http.WebPush.PushSubscription
-        {
-            Endpoint = subscription.Endpoint,
-            Keys =
-            {
-                ["p256dh"] = subscription.P256dh,
-                ["auth"] = subscription.Auth,
-            },
-        };
-
         try
         {
+            // The library leaves Keys null, so it has to be given a dictionary — adding to the
+            // one it doesn't have throws, and did, on every send.
+            var target = new Lib.Net.Http.WebPush.PushSubscription
+            {
+                Endpoint = subscription.Endpoint,
+                Keys = new Dictionary<string, string>
+                {
+                    ["p256dh"] = subscription.P256dh,
+                    ["auth"] = subscription.Auth,
+                },
+            };
+
             await client.RequestPushMessageDeliveryAsync(target, message, cancellationToken);
         }
         catch (PushServiceClientException exception)
