@@ -125,6 +125,18 @@ Note that the display name is sent by the client, because the API is called with
 *access* token and the name lives on the *id* token. It is therefore self-asserted. Verifying it
 would mean calling Cognito's `GetUser` with the caller's access token.
 
+### Notifications
+
+Every notification the game sends is also saved to each recipient's inbox — the
+`claim-notifications` table, keyed by player then a time-ordered id — whether or not push
+reached a device, so the app can list them. Entries expire after a week through DynamoDB's TTL.
+
+| Method | Route                       | Notes                                     |
+| ------ | --------------------------- | ----------------------------------------- |
+| GET    | `/api/notifications`        | The caller's inbox, newest first          |
+| DELETE | `/api/notifications/{id}`   | Dismisses one                             |
+| DELETE | `/api/notifications`        | Dismisses all                             |
+
 ### Where DynamoDB lives when running locally
 
 By default the API talks to the **real** tables in AWS, using whatever credentials the AWS SDK

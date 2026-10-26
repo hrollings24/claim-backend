@@ -21,7 +21,7 @@ public class GameNotifier(PushSender sender)
             // Everyone else is deciding where to go next, and the board just changed.
             PlayEffect.BoroughClaimed => sender.SendAsync(
                 Everyone(game, except: actingTeamId),
-                new PushNotification($"{actor} claimed {borough}", "The board has moved on.", Url(game)),
+                new PushNotification($"{actor} claimed {borough}", "The board has moved on.", Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.HotBoroughClaimed => sender.SendAsync(
@@ -29,7 +29,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} took the hot borough",
                     $"{borough} is worth two to them, and they drew double power cards. A new borough is hot.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             // Losing a borough is the thing you would most want to hear about.
@@ -38,7 +38,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} stole {borough}",
                     "It's theirs now — unless you steal it back.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             // Without this the defender wouldn't know to reach for a Veto in time.
@@ -47,7 +47,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} is stealing {borough}",
                     "They're on the clock to take it off you.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.CurseCast => sender.SendAsync(
@@ -55,7 +55,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} cursed you: {play.Detail}",
                     "It's on you now. Open the app to see it — or reverse it.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.BoroughFortified => sender.SendAsync(
@@ -63,7 +63,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} fortified {borough}",
                     "It's theirs for the rest of the game — nobody can steal it.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.SwapStarted => sender.SendAsync(
@@ -71,7 +71,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} is going through your power cards",
                     "They're about to take one, and give you one of theirs.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.Swapped => sender.SendAsync(
@@ -79,7 +79,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} swapped power cards with you",
                     $"They {play.Detail}.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.CurseReversed => sender.SendAsync(
@@ -87,7 +87,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} reversed your curse",
                     $"{play.Detail} is on you now.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             PlayEffect.StealFailed => sender.SendAsync(
@@ -95,7 +95,7 @@ public class GameNotifier(PushSender sender)
                 new PushNotification(
                     $"{actor} failed a steal on {borough}",
                     "You held on, and drew power cards for it. Pick one to keep.",
-                    Url(game)),
+                    Url(game), GameCode: game.Code),
                 cancellationToken),
 
             _ => Task.CompletedTask,
@@ -108,7 +108,7 @@ public class GameNotifier(PushSender sender)
             new PushNotification(
                 "The game has started",
                 $"{game.Board?.Active.Count ?? 0} boroughs are up for grabs. One of them is hot.",
-                Url(game)),
+                Url(game), GameCode: game.Code),
             cancellationToken);
 
     public Task HotBoroughChangedAsync(Game game, string boroughId, CancellationToken cancellationToken) =>
@@ -117,7 +117,7 @@ public class GameNotifier(PushSender sender)
             new PushNotification(
                 $"{BoroughCatalogue.NameOf(boroughId)} is now hot",
                 "Worth two points, and double power cards for whoever claims it.",
-                Url(game),
+                Url(game), GameCode: game.Code,
                 // Replaces the previous hot notification rather than stacking beside it — only
                 // one borough is ever hot, so an older one is just wrong.
                 Tag: "hot"),
@@ -129,7 +129,7 @@ public class GameNotifier(PushSender sender)
             new PushNotification(
                 $"{minutesLeft} minutes left",
                 "Last chance to claim anything you can reach.",
-                Url(game),
+                Url(game), GameCode: game.Code,
                 Tag: "ending"),
             cancellationToken);
 

@@ -2,17 +2,23 @@ using System.Net;
 using System.Text.Json;
 using Lib.Net.Http.WebPush;
 using Lib.Net.Http.WebPush.Authentication;
+using ClaimBackend.Api.Notifications;
 using Microsoft.Extensions.Options;
 using AppSubscription = ClaimBackend.Api.Push.PushSubscription;
 
 namespace ClaimBackend.Api.Push;
 
-/// <summary>What the service worker is handed. Kept small — payloads are size limited.</summary>
-public record PushNotification(string Title, string Body, string? Url = null, string? Tag = null);
+/// <summary>
+/// What the service worker is handed. Kept small — payloads are size limited.
+/// <paramref name="GameCode"/> is the game it's about, for the inbox.
+/// </summary>
+public record PushNotification(
+    string Title, string Body, string? Url = null, string? Tag = null, string? GameCode = null);
 
 public class PushSender(
     IHttpClientFactory httpClientFactory,
     PushSubscriptionStore store,
+    NotificationStore inbox,
     IOptions<PushOptions> options,
     ILogger<PushSender> logger)
 {
@@ -21,13 +27,38 @@ public class PushSender(
     private readonly PushOptions _options = options.Value;
 
     /// <summary>
-    /// Notifies every device belonging to the given players. Never throws: a notification that
-    /// fails to send must not fail the move that triggered it — the player made their claim
-    /// either way.
+    /// Puts the notification in each player's inbox, then pushes it to every device they've
+    /// switched notifications on for. Never throws: a notification that fails to send must not
+    /// fail the move that triggered it — the player made their claim either way.
     /// </summary>
     public async Task SendAsync(
         IEnumerable<string> subs, PushNotification notification, CancellationToken cancellationToken)
     {
+        var recipients = subs.Distinct().ToList();
+
+        // The inbox doesn't depend on push: a player who never switched it on still sees what
+        // happened, in the app.
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            await inbox.AddAsync(
+                recipients.Select(sub => new InboxNotification
+                {
+                    Sub = sub,
+                    Id = InboxNotification.NewId(now),
+                    GameCode = notification.GameCode,
+                    Title = notification.Title,
+                    Body = notification.Body,
+                    Url = notification.Url,
+                    CreatedAt = now,
+                }),
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Could not save notifications to inboxes.");
+        }
+
         if (!_options.IsConfigured)
         {
             // No VAPID keys, so nothing can be signed. Normal in local development.
@@ -37,7 +68,7 @@ public class PushSender(
         IReadOnlyList<AppSubscription> subscriptions;
         try
         {
-            subscriptions = await store.ForPlayersAsync(subs, cancellationToken);
+            subscriptions = await store.ForPlayersAsync(recipients, cancellationToken);
         }
         catch (Exception exception)
         {

@@ -7,6 +7,7 @@ using ClaimBackend.Api.Powers;
 using ClaimBackend.Api.Data;
 using ClaimBackend.Api.Games;
 using ClaimBackend.Api.Controllers;
+using ClaimBackend.Api.Notifications;
 using ClaimBackend.Api.Push;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -128,6 +129,10 @@ builder.Services.Configure<PushOptions>(builder.Configuration.GetSection(PushOpt
 // A named client so push traffic gets its own connection pool and timeout, and a slow push
 // service can never hold up the request that triggered it for long.
 builder.Services.AddHttpClient(nameof(PushSender), client => client.Timeout = TimeSpan.FromSeconds(5));
+
+builder.Services.Configure<NotificationsOptions>(
+    builder.Configuration.GetSection(NotificationsOptions.SectionName));
+builder.Services.AddSingleton<NotificationStore>();
 
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushSender>();
