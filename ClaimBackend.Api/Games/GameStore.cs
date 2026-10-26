@@ -3,6 +3,7 @@ using System.Text.Json;
 using Amazon.DynamoDBv2;
 using ClaimBackend.Api.Challenges;
 using ClaimBackend.Api.Powers;
+using ClaimBackend.Api.Push;
 using Amazon.DynamoDBv2.Model;
 using Microsoft.Extensions.Options;
 
@@ -60,7 +61,8 @@ public record GameMutationResult(GameMutationStatus Status, Game? Game);
 /// version attribute, so concurrent joins and leaves queue up behind each other instead of
 /// silently dropping one another's changes to the roster.
 /// </summary>
-public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, GameEngine engine)
+public class GameStore(
+    IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, GameEngine engine, GameNotifier notifier)
 {
     /// <summary>Retries for a write losing the version check to another player's write.</summary>
     private const int MaxWriteAttempts = 5;
@@ -85,6 +87,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         }
 
         var expectedVersion = game.Version;
+        var hotBefore = HotOf(game);
         if (!engine.Advance(game, DateTimeOffset.UtcNow))
         {
             return game;
@@ -94,14 +97,31 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         try
         {
             await WriteAsync(game, expectedVersion, cancellationToken);
+            await AnnounceHotAsync(hotBefore, game, cancellationToken);
         }
         catch (ConditionalCheckFailedException)
         {
-            // Another request advanced it first, to the same place.
+            // Another request advanced it first, to the same place — and announced it.
         }
 
         return game;
     }
+
+    /// <summary>The hot borough of a game already under way, or null if it isn't.</summary>
+    private static string? HotOf(Game game) =>
+        game.Status is GameStatus.InProgress ? game.Board?.HotBoroughId : null;
+
+    /// <summary>
+    /// The hot borough moves on a timer, from whichever request happens to look at the game first
+    /// — nearly always a phone refreshing the game screen — or the moment it is claimed. Announced
+    /// here, only after the move has been saved, so it goes out once whichever way it happened:
+    /// a request that lost the race to save it never announces anything. Nothing goes out for the
+    /// first hot borough of a game, which "The game has started" already covers.
+    /// </summary>
+    private Task AnnounceHotAsync(string? hotBefore, Game game, CancellationToken cancellationToken) =>
+        hotBefore is not null && HotOf(game) is { } hot && hot != hotBefore
+            ? notifier.HotBoroughChangedAsync(game, hot, cancellationToken)
+            : Task.CompletedTask;
 
     private async Task<Game?> LoadAsync(string code, CancellationToken cancellationToken)
     {
@@ -188,12 +208,15 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
     /// Applies a change made outside a request — the sweep bringing a clock forward. Returns
     /// false if the game moved on in the meantime, in which case the next sweep will see it.
     /// </summary>
-    public async Task<bool> TrySaveAsync(Game game, long expectedVersion, CancellationToken cancellationToken)
+    /// <param name="hotBefore">The hot borough before the change, so a move can be announced.</param>
+    public async Task<bool> TrySaveAsync(
+        Game game, long expectedVersion, string? hotBefore, CancellationToken cancellationToken)
     {
         game.Version = expectedVersion + 1;
         try
         {
             await WriteAsync(game, expectedVersion, cancellationToken);
+            await AnnounceHotAsync(hotBefore, game, cancellationToken);
             return true;
         }
         catch (ConditionalCheckFailedException)
@@ -704,6 +727,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             }
 
             var expectedVersion = game.Version;
+            var hotBefore = HotOf(game);
 
             // Bring deadlines up to date before the rules look at the game, so a play is judged
             // against a board where lapsed locks are open and the hot borough has moved on.
@@ -720,6 +744,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
             try
             {
                 await WriteAsync(game, expectedVersion, cancellationToken);
+                await AnnounceHotAsync(hotBefore, game, cancellationToken);
                 return new GameMutationResult(GameMutationStatus.Success, game);
             }
             catch (ConditionalCheckFailedException)

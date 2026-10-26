@@ -131,7 +131,19 @@ public record IncomingStealDto(
     DateTimeOffset ExpiresAt);
 
 /// <summary>Cards drawn and waiting for the team to keep up to <paramref name="Keep"/> of them.</summary>
-public record PowerOfferDto(string Id, string Reason, int Keep, IReadOnlyList<PowerCardDto> Cards);
+/// <param name="Source">Claim, or SurvivedSteal when another team's steal on you failed.</param>
+/// <param name="FromTeamName">For a survived steal, the team that tried it.</param>
+/// <param name="WasHot">For a claim, whether it was the hot borough.</param>
+public record PowerOfferDto(
+    string Id,
+    string Reason,
+    int Keep,
+    IReadOnlyList<PowerCardDto> Cards,
+    string Source,
+    string? BoroughId,
+    string? BoroughName,
+    string? FromTeamName,
+    bool WasHot);
 
 /// <summary>
 /// Everything a player needs to decide their next move: what's on offer, who holds what, the

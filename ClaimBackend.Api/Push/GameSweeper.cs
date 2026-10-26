@@ -11,6 +11,7 @@ public record SweepResult(int GamesChecked, int HotRotations, int EndingSoon, in
 /// The engine advances deadlines when a game is read, which is enough while somebody is looking
 /// at it. Notifications are the opposite case — the hot borough moving is worth telling people
 /// about precisely when nobody has the app open — so something has to look on their behalf.
+/// Whichever request moves it, the store is what announces it.
 /// </summary>
 public class GameSweeper(
     GameStore store,
@@ -45,9 +46,9 @@ public class GameSweeper(
                 continue;
             }
 
-            // Only notify once the change is safely stored. Announcing a rotation that then lost
-            // its write would point everyone at a borough that isn't hot.
-            if (!await store.TrySaveAsync(game, expectedVersion, cancellationToken))
+            // The store announces a hot borough move once the write has stuck, as it does for every
+            // other request — so a rotation that lost its write is never announced.
+            if (!await store.TrySaveAsync(game, expectedVersion, hotBefore, cancellationToken))
             {
                 logger.LogInformation("Game {Code} changed under the sweep; leaving it to the next pass.", game.Code);
                 continue;
@@ -57,7 +58,6 @@ public class GameSweeper(
             if (hotAfter is not null && hotAfter != hotBefore && game.Status is GameStatus.InProgress)
             {
                 hotRotations++;
-                await notifier.HotBoroughChangedAsync(game, hotAfter, cancellationToken);
             }
 
             if (warnDue && game.Status is GameStatus.InProgress)

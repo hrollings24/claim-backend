@@ -658,7 +658,10 @@ public class GameEngine(IOptions<GamesOptions> options)
             team.Id,
             $"Claimed {BoroughCatalogue.NameOf(active.BoroughId)}",
             card.PowerDraws * multiplier,
-            multiplier);
+            multiplier,
+            OfferSource.Claim,
+            active.BoroughId,
+            wasHot: wasHot);
 
         team.Territories.Add(new Territory { BoroughId = active.BoroughId });
         board.Active.Remove(active);
@@ -731,12 +734,24 @@ public class GameEngine(IOptions<GamesOptions> options)
             defender.Id,
             $"Survived a steal on {BoroughCatalogue.NameOf(steal.BoroughId)}",
             steal.PowerDraws,
-            keep: 1);
+            keep: 1,
+            OfferSource.SurvivedSteal,
+            steal.BoroughId,
+            fromTeamId: stealingTeamId);
 
         return defender.Id;
     }
 
-    private static void AddOffer(Game game, string teamId, string reason, int draws, int keep)
+    private static void AddOffer(
+        Game game,
+        string teamId,
+        string reason,
+        int draws,
+        int keep,
+        OfferSource source,
+        string boroughId,
+        string? fromTeamId = null,
+        bool wasHot = false)
     {
         if (game.FindPowers(teamId) is not { } powers || game.PowerDeck is not { } deck)
         {
@@ -757,6 +772,10 @@ public class GameEngine(IOptions<GamesOptions> options)
             Reason = reason,
             Cards = cards,
             Keep = Math.Min(keep, cards.Count),
+            Source = source,
+            BoroughId = boroughId,
+            FromTeamId = fromTeamId,
+            WasHot = wasHot,
         });
     }
 

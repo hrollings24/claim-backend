@@ -118,6 +118,16 @@ public class PowerCard
     public bool IsPlayed => PlayedAt is not null;
 }
 
+/// <summary>What earned an offer. Stored as numbers inside games, so the values are pinned.</summary>
+public enum OfferSource
+{
+    /// <summary>Completing a claim challenge.</summary>
+    Claim = 0,
+
+    /// <summary>Holding on to a borough when another team's steal on it failed or ran out.</summary>
+    SurvivedSteal = 1,
+}
+
 /// <summary>
 /// Power cards drawn and waiting for the team to pick which to keep. Whatever isn't kept is
 /// discarded. Offers queue up, so a team that claims twice before choosing loses nothing.
@@ -133,6 +143,17 @@ public class PowerOffer
 
     /// <summary>How many of <see cref="Cards"/> the team may keep.</summary>
     public required int Keep { get; init; }
+
+    public OfferSource Source { get; init; }
+
+    /// <summary>The borough claimed, or the one the failed steal was aimed at.</summary>
+    public string? BoroughId { get; init; }
+
+    /// <summary>For a survived steal, the team that tried it.</summary>
+    public string? FromTeamId { get; init; }
+
+    /// <summary>For a claim: whether it was the hot borough, which doubled the draw.</summary>
+    public bool WasHot { get; init; }
 }
 
 /// <summary>

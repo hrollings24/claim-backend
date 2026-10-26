@@ -418,7 +418,15 @@ public class GamesController(
             yourPowers?.Cards.OrderBy(c => c.IsPlayed).Select(ToPowerCardDto).ToList() ?? [],
             yourPowers?.Offers
                 .Select(offer => new PowerOfferDto(
-                    offer.Id, offer.Reason, offer.Keep, offer.Cards.Select(ToPowerCardDto).ToList()))
+                    offer.Id,
+                    offer.Reason,
+                    offer.Keep,
+                    offer.Cards.Select(ToPowerCardDto).ToList(),
+                    offer.Source.ToString(),
+                    offer.BoroughId,
+                    offer.BoroughId is { } borough ? BoroughCatalogue.NameOf(borough) : null,
+                    offer.FromTeamId is { } from ? TeamName(game, from) : null,
+                    offer.WasHot))
                 .ToList() ?? [],
             game.Curses
                 .Where(c => c.Status is CurseStatus.Active
