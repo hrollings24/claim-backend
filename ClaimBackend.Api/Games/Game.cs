@@ -22,6 +22,12 @@ public class GameTeam
     public required string Id { get; init; }
     public required string Name { get; init; }
 
+    /// <summary>
+    /// One of <see cref="TeamColors.All"/>, unique within the game; colours its boroughs on the map.
+    /// Null only for teams made before colours existed, or once all twelve are taken.
+    /// </summary>
+    public string? Color { get; set; }
+
     /// <summary>Boroughs this team holds. One point each at the end.</summary>
     public required List<Territory> Territories { get; init; }
 

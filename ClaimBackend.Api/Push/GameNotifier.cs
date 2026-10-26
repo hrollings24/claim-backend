@@ -53,8 +53,8 @@ public class GameNotifier(PushSender sender)
             PlayEffect.CurseCast => sender.SendAsync(
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(
-                    $"{actor} cursed you: {play.Detail}",
-                    "It's on you now. Open the app to see it — or reverse it.",
+                    "You've been cursed",
+                    $"You've been hit with {play.Detail}.",
                     Url(game), GameCode: game.Code),
                 cancellationToken),
 

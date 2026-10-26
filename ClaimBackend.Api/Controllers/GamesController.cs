@@ -58,14 +58,20 @@ public class GamesController(
     }
 
     /// <summary>
-    /// Plays a claim challenge from the hand at an active borough and reports whether it came
-    /// off. A success claims the borough and draws power cards, which arrive as an offer to
-    /// choose from.
+    /// Plays a completed claim challenge at an active borough: it claims the borough and draws
+    /// power cards, which arrive as an offer to choose from.
     /// </summary>
     [HttpPost("{code}/play")]
     public async Task<ActionResult<GameDto>> Play(
         string code, [FromBody] PlayCardRequest request, CancellationToken cancellationToken)
     {
+        // Older versions of the app still offer "Failed". Refuse it rather than quietly treating
+        // it as a claim.
+        if (request.Succeeded is false)
+        {
+            return Failure(GameMutationStatus.ClaimsCantFail, code);
+        }
+
         var deck = await challenges.GetDeckAsync(cancellationToken);
 
         var (result, play) = await store.PlayAsync(
@@ -73,7 +79,6 @@ public class GamesController(
             Sub,
             request.CardId,
             request.BoroughId,
-            request.Succeeded,
             deck,
             cancellationToken);
 
@@ -282,6 +287,18 @@ public class GamesController(
             : Failure(result.Status, code);
     }
 
+    [HttpPost("{code}/teams/{teamId}/color")]
+    public async Task<ActionResult<GameDto>> SetTeamColor(
+        string code, string teamId, [FromBody] SetTeamColorRequest request, CancellationToken cancellationToken)
+    {
+        var result = await store.SetTeamColorAsync(
+            GameCodeGenerator.Normalize(code), Sub, teamId, request.Color, cancellationToken);
+
+        return result.Status is GameMutationStatus.Success
+            ? ToDto(result.Game!)
+            : Failure(result.Status, code);
+    }
+
     [HttpPost("{code}/teams/leave")]
     public async Task<ActionResult<GameDto>> LeaveTeam(string code, CancellationToken cancellationToken)
     {
@@ -359,7 +376,7 @@ public class GamesController(
                 player.Sub == Sub,
                 player.TeamId))
             .ToList(),
-        game.Teams.Select(team => new GameTeamDto(team.Id, team.Name)).ToList());
+        game.Teams.Select(team => new GameTeamDto(team.Id, team.Name, team.Color)).ToList());
 
     /// <summary>Null in the lobby; the board only exists once the game has been dealt.</summary>
     private GameBoardDto? BoardToDto(Game game)
@@ -539,6 +556,22 @@ public class GamesController(
 
         GameMutationStatus.GameNotRunning => Problem(
             title: "This game isn't running",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.ClaimsCantFail => Problem(
+            title: "Claim challenges can't be failed — only play one once you've done it",
+            statusCode: StatusCodes.Status409Conflict),
+
+        GameMutationStatus.NotYourTeam => Problem(
+            title: "You can only change your own team's colour",
+            statusCode: StatusCodes.Status403Forbidden),
+
+        GameMutationStatus.InvalidColor => Problem(
+            title: "That isn't one of the team colours",
+            statusCode: StatusCodes.Status400BadRequest),
+
+        GameMutationStatus.ColorTaken => Problem(
+            title: "Another team already has that colour",
             statusCode: StatusCodes.Status409Conflict),
 
         GameMutationStatus.TooManyTeams => Problem(

@@ -25,6 +25,10 @@ public enum GameMutationStatus
     TeamNotFound,
     DuplicateTeamName,
     TooManyTeams,
+    InvalidColor,
+    ColorTaken,
+    NotYourTeam,
+    ClaimsCantFail,
     Conflict,
     AlreadyPlayed,
     NotPlayed,
@@ -364,19 +368,17 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
         }, cancellationToken);
 
     /// <summary>
-    /// Plays a claim challenge from the caller's team hand at a borough, reporting whether it
-    /// came off.
+    /// Plays a completed claim challenge from the caller's team hand at a borough.
     /// </summary>
     public Task<(GameMutationResult Result, PlayResult Play)> PlayAsync(
         string code,
         string sub,
         string cardId,
         string boroughId,
-        bool succeeded,
         IReadOnlyList<Challenge> deck,
         CancellationToken cancellationToken) =>
         MutateAsTeamAsync(code, sub, (game, teamId) =>
-            engine.Play(game, teamId, cardId, boroughId, succeeded, deck, DateTimeOffset.UtcNow),
+            engine.Play(game, teamId, cardId, boroughId, deck, DateTimeOffset.UtcNow),
             cancellationToken);
 
     /// <summary>Keeps some, or none, of a power-card offer; the rest are discarded.</summary>
@@ -581,10 +583,59 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 return GameMutationStatus.DuplicateTeamName;
             }
 
-            var team = new GameTeam { Id = Guid.NewGuid().ToString("n"), Name = name, Territories = [] };
+            var team = new GameTeam
+            {
+                Id = Guid.NewGuid().ToString("n"),
+                Name = name,
+                Color = TeamColors.FirstFree(game.Teams),
+                Territories = [],
+            };
             game.Teams.Add(team);
             player.TeamId = team.Id;
 
+            return GameMutationStatus.Success;
+        }, cancellationToken);
+
+    /// <summary>
+    /// Any member can change their team's colour, in the lobby, to one no other team has. A
+    /// colour is what tells teams apart on the map, so two can never share one.
+    /// </summary>
+    public Task<GameMutationResult> SetTeamColorAsync(
+        string code, string sub, string teamId, string color, CancellationToken cancellationToken) =>
+        MutateAsync(code, game =>
+        {
+            var player = game.FindPlayer(sub);
+            if (player is null)
+            {
+                return GameMutationStatus.NotInGame;
+            }
+
+            if (game.Status is not GameStatus.Lobby)
+            {
+                return GameMutationStatus.AlreadyStarted;
+            }
+
+            if (game.FindTeam(teamId) is not { } team)
+            {
+                return GameMutationStatus.TeamNotFound;
+            }
+
+            if (player.TeamId != team.Id)
+            {
+                return GameMutationStatus.NotYourTeam;
+            }
+
+            if (!TeamColors.IsValid(color))
+            {
+                return GameMutationStatus.InvalidColor;
+            }
+
+            if (game.Teams.Any(t => t.Id != team.Id && t.Color == color))
+            {
+                return GameMutationStatus.ColorTaken;
+            }
+
+            team.Color = color;
             return GameMutationStatus.Success;
         }, cancellationToken);
 
@@ -769,6 +820,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                     {
                         ["Id"] = new AttributeValue(team.Id),
                         ["Name"] = new AttributeValue(team.Name),
+                        ["Color"] = team.Color is null ? new AttributeValue { NULL = true } : new AttributeValue(team.Color),
                         ["Territories"] = Json(team.Territories),
                         ["BonusPoints"] = Number(team.BonusPoints),
                     },
@@ -807,6 +859,7 @@ public class GameStore(IAmazonDynamoDB dynamo, IOptions<GamesOptions> options, G
                 {
                     Id = team.M["Id"].S,
                     Name = team.M["Name"].S,
+                    Color = OptionalString(team.M, "Color"),
                     Territories = FromJson<List<Territory>>(team.M, "Territories") ?? [],
                     BonusPoints = team.M.TryGetValue("BonusPoints", out var bonus)
                         ? int.Parse(bonus.N, CultureInfo.InvariantCulture)

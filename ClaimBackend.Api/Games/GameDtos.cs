@@ -8,7 +8,10 @@ namespace ClaimBackend.Api.Games;
 /// </summary>
 public record GamePlayerDto(string Name, bool IsHost, bool IsYou, string? TeamId);
 
-public record GameTeamDto(string Id, string Name);
+/// <param name="Color">An id from the team palette, e.g. "red"; null for a team without one.</param>
+public record GameTeamDto(string Id, string Name, string? Color);
+
+public record SetTeamColorRequest([Required] string Color);
 
 public record GameDto(
     string Code,
@@ -155,10 +158,14 @@ public record GameBoardDto(
     IReadOnlyList<TeamScoreDto> Scores,
     DateTimeOffset? EndsAt);
 
+/// <summary>
+/// A completed claim. <paramref name="Succeeded"/> is only there for older versions of the app,
+/// which sent false for a failed claim; claims can't fail, so false is refused.
+/// </summary>
 public record PlayCardRequest(
     [Required] string CardId,
     [Required] string BoroughId,
-    bool Succeeded);
+    bool? Succeeded = null);
 
 /// <summary>The ids of the offered cards to keep. Empty turns the whole offer down.</summary>
 public record KeepPowersRequest([Required] IReadOnlyList<string> CardIds);

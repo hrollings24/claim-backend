@@ -169,16 +169,15 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>
-    /// Plays a claim challenge from the hand at an active borough. A card is spent whether or not
-    /// the challenge came off, and the hand is topped back up; only a success claims the borough
-    /// and draws power cards.
+    /// Plays a claim challenge from the hand at an active borough, which claims it and draws power
+    /// cards. A claim can't be failed — a team only plays one once it's done — so there is no
+    /// outcome to report; the hand is topped back up either way. Only steals can fail.
     /// </summary>
     public PlayResult Play(
         Game game,
         string teamId,
         string cardId,
         string boroughId,
-        bool succeeded,
         IReadOnlyList<Challenge> deck,
         DateTimeOffset now)
     {
@@ -206,7 +205,7 @@ public class GameEngine(IOptions<GamesOptions> options)
             return new PlayResult(GameMutationStatus.InvalidTarget);
         }
 
-        var effect = succeeded ? Claim(game, board, team, card, active, now) : PlayEffect.Nothing;
+        var effect = Claim(game, board, team, card, active, now);
 
         // Chosen before the played card leaves the hand, so the challenge just attempted isn't
         // handed straight back.

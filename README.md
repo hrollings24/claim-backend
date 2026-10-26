@@ -47,7 +47,7 @@ All of them require a Cognito access token.
 Each team holds five **claim** challenges. Completing one at an active borough claims it and
 draws power cards — as many as the challenge says (`PowerDraws`, 1–5, default 2), of which the
 team keeps one. The hot borough is worth an extra point, draws twice as many, and lets the team
-keep two. A failed claim spends the card and draws nothing.
+keep two. Claims can't be failed — a team only plays one once it's done it; only steals can fail.
 
 **Power cards** are **Steal**, built in (`Powers/PowerCatalogue.cs`), plus any **Curse** or
 **Boost** a player writes in the app. Anyone can add, edit or delete those; they're honour
@@ -84,6 +84,10 @@ picks a size from 4 to 16 in the lobby.
 A **curse** is cast on a team, who are notified and see it in the app. It can have a duration,
 after which it lifts on its own; without one it lasts until the cursed team marks it cleared.
 
+Each team has a colour from a fixed palette (`Games/TeamColors.cs`), unique within the game and
+given automatically when the team is made; the app's tile map draws held boroughs in it. Orange and
+white are left out because the map uses them for the hot borough and boroughs on the board.
+
 Besides Steal, three more cards are built in. **Curse Reverse** is never applied automatically —
 the cursed team uses it on a curse while it's active, ending it and casting it afresh, full time,
 on the sender; a reversal can't be reversed again. **Fortify** locks one of your boroughs for the
@@ -99,7 +103,7 @@ bouncing back and forth. A borough is hot at most once per game.
 
 | Method | Route                                           | Notes                                       |
 | ------ | ----------------------------------------------- | ------------------------------------------- |
-| POST   | `/api/games/{code}/play`                        | Claim: `{ cardId, boroughId, succeeded }`   |
+| POST   | `/api/games/{code}/play`                        | A completed claim: `{ cardId, boroughId }`  |
 | POST   | `/api/games/{code}/powers/offers/{offerId}/keep` | `{ cardIds }`; empty turns the offer down  |
 | POST   | `/api/games/{code}/powers/{cardId}/play`        | `{ boroughId }` for Steal or Fortify, `{ targetTeamId }` for a curse or Swap |
 | POST   | `/api/games/{code}/powers/{cardId}/resolve`     | Steal only: `{ succeeded }`, before the clock runs out |
@@ -107,6 +111,7 @@ bouncing back and forth. A borough is hot at most once per game.
 | POST   | `/api/games/{code}/curses/{curseId}/respond`    | `{ cardId }` — a Curse Reverse               |
 | POST   | `/api/games/{code}/curses/{curseId}/clear`      | Untimed curses only, by the cursed team      |
 | POST   | `/api/games/{code}/powers/{cardId}/swap`        | `{ takeCardId, giveCardId }` — finishes a Swap |
+| POST   | `/api/games/{code}/teams/{teamId}/color`        | Your own team only, lobby: `{ color }` from the palette, unique per game |
 | POST   | `/api/games/{code}/board-size`                  | Host only, lobby: `{ boardSize }` 4–16, null = auto |
 
 Codes come from a 32-character alphabet with `I`, `O`, `0` and `1` left out, since they get read
