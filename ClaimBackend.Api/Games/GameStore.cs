@@ -49,7 +49,6 @@ public enum GameMutationStatus
     BoroughLocked,
     AlreadyFortified,
     UnderAttack,
-    NothingToSwap,
     SwapNotFound,
     NotInTheirHand,
 }

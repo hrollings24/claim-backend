@@ -18,6 +18,7 @@ public enum PlayEffect
     CurseReversed,
     BoroughFortified,
     SwapStarted,
+    SwapWasted,
     Swapped,
 }
 
@@ -362,9 +363,14 @@ public class GameEngine(IOptions<GamesOptions> options)
                     return new PlayResult(GameMutationStatus.InvalidTarget);
                 }
 
+                // A gamble: you don't know what they hold until you commit. A team with nothing
+                // leaves the Swap spent for nothing.
                 if (game.FindPowers(target.Id) is not { UnplayedCount: > 0 })
                 {
-                    return new PlayResult(GameMutationStatus.NothingToSwap);
+                    card.Swap = new SwapAttempt { TargetTeamId = target.Id, CompletedAt = now };
+                    card.PlayedAt = now;
+                    card.PlayedOn = $"{target.Name}: they had no cards";
+                    return new PlayResult(GameMutationStatus.Success, PlayEffect.SwapWasted, target.Id);
                 }
 
                 card.Swap = new SwapAttempt { TargetTeamId = target.Id };

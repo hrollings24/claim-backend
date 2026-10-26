@@ -92,7 +92,8 @@ Besides Steal, three more cards are built in. **Curse Reverse** is never applied
 the cursed team uses it on a curse while it's active, ending it and casting it afresh, full time,
 on the sender; a reversal can't be reversed again. **Fortify** locks one of your boroughs for the
 rest of the game, though not while a steal on it is running. **Swap** commits to another team,
-reveals their power cards, and then takes one and gives one back. Card kinds and statuses are
+reveals their power cards, and then takes one and gives one back — or, if they hold none, is
+wasted. Card kinds and statuses are
 stored as numbers inside games, so their enum values are pinned (3 was Veto, since removed).
 
 Playing a **Steal** at a borough another team holds reveals a random steal challenge and starts

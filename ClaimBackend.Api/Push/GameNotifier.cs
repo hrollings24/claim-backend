@@ -74,6 +74,14 @@ public class GameNotifier(PushSender sender)
                     Url(game), GameCode: game.Code),
                 cancellationToken),
 
+            PlayEffect.SwapWasted => sender.SendAsync(
+                InTeam(game, play.CounterpartTeamId),
+                new PushNotification(
+                    $"{actor} tried to swap power cards with you",
+                    "You had nothing to take — their Swap was wasted.",
+                    Url(game), GameCode: game.Code),
+                cancellationToken),
+
             PlayEffect.Swapped => sender.SendAsync(
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(

@@ -654,10 +654,6 @@ public class GamesController(
             title: "A steal on that borough is already running — you can't fortify it now",
             statusCode: StatusCodes.Status409Conflict),
 
-        GameMutationStatus.NothingToSwap => Problem(
-            title: "That team has no power cards to swap",
-            statusCode: StatusCodes.Status409Conflict),
-
         GameMutationStatus.SwapNotFound => Problem(
             title: "That swap is already done",
             statusCode: StatusCodes.Status409Conflict),
