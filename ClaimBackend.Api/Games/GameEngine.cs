@@ -423,13 +423,18 @@ public class GameEngine(IOptions<GamesOptions> options)
                 }
 
                 var challenge = steals[Random.Shared.Next(steals.Count)];
+
+                // A challenge with {word} in it gets one picked now, and keeps it: the text is
+                // copied filled in, so every refresh shows the same word.
+                var word = ChallengeWords.HasPlaceholder(challenge) ? ChallengeWords.Pick() : null;
+
                 card.Steal = new StealAttempt
                 {
                     BoroughId = boroughId!,
                     ChallengeId = challenge.Id,
-                    Title = challenge.Title,
-                    Summary = challenge.Summary,
-                    FurtherDetails = challenge.FurtherDetails,
+                    Title = ChallengeWords.Fill(challenge.Title, word),
+                    Summary = ChallengeWords.Fill(challenge.Summary, word),
+                    FurtherDetails = ChallengeWords.Fill(challenge.FurtherDetails, word),
                     ExpiresAt = now.AddMinutes(challenge.EffectiveStealMinutes),
                     PowerDraws = challenge.EffectivePowerDraws,
                 };

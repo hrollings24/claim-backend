@@ -96,6 +96,9 @@ reveals their power cards, and then takes one and gives one back — or, if they
 wasted. Card kinds and statuses are
 stored as numbers inside games, so their enum values are pinned (3 was Veto, since removed).
 
+A steal challenge may include `{word}`: when the steal is revealed it's replaced with a word
+picked from `Challenges/ChallengeWords.cs`, the same everywhere in that challenge.
+
 Playing a **Steal** at a borough another team holds reveals a random steal challenge and starts
 its clock. Report the result before it runs out: success moves the borough, failure (or the
 clock running out) moves nothing and the defending team draws the steal challenge's
