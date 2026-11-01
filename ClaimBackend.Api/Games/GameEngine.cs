@@ -355,6 +355,33 @@ public class GameEngine(IOptions<GamesOptions> options)
                 return new PlayResult(GameMutationStatus.Success, PlayEffect.BoroughFortified, BoroughId: boroughId);
             }
 
+            case PowerKind.Shuffle:
+            {
+                if (game.FindHand(teamId) is not { } hand)
+                {
+                    return new PlayResult(GameMutationStatus.NotOnATeam);
+                }
+
+                // New challenges first; ones already held only make up the numbers when the deck
+                // has too few claims for a whole fresh hand.
+                var held = hand.Cards.Select(c => c.ChallengeId).ToHashSet();
+                var claims = ClaimsIn(deck);
+                var fresh = claims
+                    .Where(c => !held.Contains(c.Id))
+                    .OrderBy(_ => Random.Shared.Next())
+                    .Concat(claims.Where(c => held.Contains(c.Id)).OrderBy(_ => Random.Shared.Next()))
+                    .Take(_options.HandSize)
+                    .Select(ToHandCard)
+                    .ToList();
+
+                hand.Cards.Clear();
+                hand.Cards.AddRange(fresh);
+
+                card.PlayedAt = now;
+                card.PlayedOn = "your hand";
+                return new PlayResult(GameMutationStatus.Success);
+            }
+
             case PowerKind.Swap:
             {
                 var target = targetTeamId is null ? null : game.FindTeam(targetTeamId);

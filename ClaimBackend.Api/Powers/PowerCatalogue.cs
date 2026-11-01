@@ -26,6 +26,9 @@ public enum PowerKind
 
     /// <summary>Played on another team: see their power cards, take one, give one back.</summary>
     Swap = 6,
+
+    /// <summary>Played on yourself: your whole hand of claim challenges is replaced.</summary>
+    Shuffle = 7,
 }
 
 /// <param name="DurationMinutes">
@@ -69,8 +72,14 @@ public static class PowerCatalogue
         "Swap",
         "Pick another team. Their power cards are revealed to you: take the one you want, and give them one of yours.");
 
+    public static readonly PowerDefinition Shuffle = new(
+        "shuffle",
+        PowerKind.Shuffle,
+        "Shuffle",
+        "Throw away your whole hand of claim challenges and draw a fresh one — none of the ones you were holding, if there are enough to go round.");
+
     /// <summary>The cards with rules behind them, which nobody can edit or delete.</summary>
-    public static readonly IReadOnlyList<PowerDefinition> BuiltIn = [Steal, Reverse, Fortify, Swap];
+    public static readonly IReadOnlyList<PowerDefinition> BuiltIn = [Steal, Reverse, Fortify, Swap, Shuffle];
 
     /// <summary>
     /// Cards that shipped in code before players could write their own. Written to the table once,

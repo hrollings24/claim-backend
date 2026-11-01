@@ -93,7 +93,7 @@ the cursed team uses it on a curse while it's active, ending it and casting it a
 on the sender; a reversal can't be reversed again. **Fortify** locks one of your boroughs for the
 rest of the game, though not while a steal on it is running. **Swap** commits to another team,
 reveals their power cards, and then takes one and gives one back — or, if they hold none, is
-wasted. Card kinds and statuses are
+wasted. **Shuffle** replaces the team's whole hand of claim challenges with new ones. Card kinds and statuses are
 stored as numbers inside games, so their enum values are pinned (3 was Veto, since removed).
 
 A steal challenge may include `{word}`: when the steal is revealed it's replaced with a word
