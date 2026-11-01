@@ -74,6 +74,15 @@ public class GameNotifier(PushSender sender)
                     Url(game), GameCode: game.Code),
                 cancellationToken),
 
+            // The board is everyone's, so everyone else hears the moment it changes.
+            PlayEffect.BoardShaken => sender.SendAsync(
+                Everyone(game, except: actingTeamId),
+                new PushNotification(
+                    $"{actor} shook up the board",
+                    "Every borough on the board but the hot one is new. Take a look before you travel.",
+                    Url(game), GameCode: game.Code),
+                cancellationToken),
+
             PlayEffect.SwapWasted => sender.SendAsync(
                 InTeam(game, play.CounterpartTeamId),
                 new PushNotification(

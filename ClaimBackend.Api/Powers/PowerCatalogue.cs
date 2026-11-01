@@ -29,6 +29,9 @@ public enum PowerKind
 
     /// <summary>Played on yourself: your whole hand of claim challenges is replaced.</summary>
     Shuffle = 7,
+
+    /// <summary>Played on the board: every borough on it but the hot one is swapped for new ones.</summary>
+    BoardShake = 8,
 }
 
 /// <param name="DurationMinutes">
@@ -78,8 +81,14 @@ public static class PowerCatalogue
         "Shuffle",
         "Throw away your whole hand of claim challenges and draw a fresh one — none of the ones you were holding, if there are enough to go round.");
 
+    public static readonly PowerDefinition BoardShake = new(
+        "board-shake",
+        PowerKind.BoardShake,
+        "Board Shake",
+        "Swap every borough on the board for new ones — all but the hot one, which stays put. It changes the board for every team.");
+
     /// <summary>The cards with rules behind them, which nobody can edit or delete.</summary>
-    public static readonly IReadOnlyList<PowerDefinition> BuiltIn = [Steal, Reverse, Fortify, Swap, Shuffle];
+    public static readonly IReadOnlyList<PowerDefinition> BuiltIn = [Steal, Reverse, Fortify, Swap, Shuffle, BoardShake];
 
     /// <summary>
     /// Cards that shipped in code before players could write their own. Written to the table once,

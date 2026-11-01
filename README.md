@@ -93,8 +93,14 @@ the cursed team uses it on a curse while it's active, ending it and casting it a
 on the sender; a reversal can't be reversed again. **Fortify** locks one of your boroughs for the
 rest of the game, though not while a steal on it is running. **Swap** commits to another team,
 reveals their power cards, and then takes one and gives one back — or, if they hold none, is
-wasted. **Shuffle** replaces the team's whole hand of claim challenges with new ones. Card kinds and statuses are
+wasted. **Shuffle** replaces the team's whole hand of claim challenges with new ones. **Board Shake** swaps every
+borough on the board but the hot one for new ones from the pool, for every team. Card kinds and statuses are
 stored as numbers inside games, so their enum values are pinned (3 was Veto, since removed).
+
+Quietly, every team is guaranteed to see a Steal: if none has turned up in its first 8 power
+cards drawn, one of the next 3 is made one, taken from the deck with the card it replaces put back
+(`GamesOptions.StealDrought`/`StealWithin`). It stops once a team has drawn one, and isn't
+mentioned to players — it should feel like luck.
 
 A steal challenge may include `{word}`: when the steal is revealed it's replaced with a word
 picked from `Challenges/ChallengeWords.cs`, the same everywhere in that challenge.

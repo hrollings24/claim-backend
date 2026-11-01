@@ -186,6 +186,22 @@ public class TeamPowers
     public required List<PowerCard> Cards { get; init; }
     public required List<PowerOffer> Offers { get; init; }
 
+    /// <summary>
+    /// Power cards drawn for this team so far, counted only until its first Steal turns up — the
+    /// guarantee that every team sees one (see <see cref="GameEngine"/>) needs nothing after that.
+    /// </summary>
+    public int DrawnWithoutSteal { get; set; }
+
+    /// <summary>Whether a Steal has ever turned up in this team's draws, kept or not.</summary>
+    public bool HasDrawnSteal { get; set; }
+
+    /// <summary>
+    /// Which draw, counted in <see cref="DrawnWithoutSteal"/>, will be made a Steal if none has
+    /// come by then. Picked at random once the drought sets in, so it doesn't land on the same
+    /// card every game.
+    /// </summary>
+    public int? StealDueAt { get; set; }
+
     [JsonIgnore]
     public int UnplayedCount => Cards.Count(c => !c.IsPlayed);
 }

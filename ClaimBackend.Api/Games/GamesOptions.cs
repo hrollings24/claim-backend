@@ -67,6 +67,16 @@ public class GamesOptions
     /// </summary>
     public int DefaultHotRotationMinutes { get; set; } = 90;
 
+    /// <summary>
+    /// A game with no steals would be a poorer one, so every team is quietly guaranteed to see a
+    /// Steal: if one hasn't turned up in its first <see cref="StealDrought"/> power cards drawn,
+    /// one of the next <see cref="StealWithin"/> is made a Steal. Players aren't told — it should
+    /// just feel like luck. It stops once a team has drawn one.
+    /// </summary>
+    public int StealDrought { get; set; } = 8;
+
+    public int StealWithin { get; set; } = 3;
+
     /// <summary>How close to the end a game has to be before players are warned it is nearly over.</summary>
     public int EndingSoonMinutes { get; set; } = 15;
 }

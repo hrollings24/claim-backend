@@ -19,6 +19,7 @@ public enum PlayEffect
     BoroughFortified,
     SwapStarted,
     SwapWasted,
+    BoardShaken,
     Swapped,
 }
 
@@ -382,6 +383,35 @@ public class GameEngine(IOptions<GamesOptions> options)
                 return new PlayResult(GameMutationStatus.Success);
             }
 
+            case PowerKind.BoardShake:
+            {
+                if (game.Board is not { } board)
+                {
+                    return new PlayResult(GameMutationStatus.GameNotRunning);
+                }
+
+                // Everything but the hot borough goes back in the pool and fresh ones come out. If
+                // the pool is nearly spent, as many as it can spare are swapped and the rest stay.
+                var outgoing = board.Active.Where(a => a.BoroughId != board.HotBoroughId).ToList();
+                var incoming = board.Remaining.Take(outgoing.Count).ToList();
+                var replaced = outgoing.Take(incoming.Count).ToList();
+
+                board.Active.RemoveAll(replaced.Contains);
+                board.Active.AddRange(incoming.Select(id => new ActiveBorough { BoroughId = id }));
+
+                // Remaining is drawn from the front, so shuffle the returned boroughs in rather than
+                // leaving them queued at the back.
+                var pool = board.Remaining.Skip(incoming.Count).Concat(replaced.Select(a => a.BoroughId))
+                    .OrderBy(_ => Random.Shared.Next())
+                    .ToList();
+                board.Remaining.Clear();
+                board.Remaining.AddRange(pool);
+
+                card.PlayedAt = now;
+                card.PlayedOn = "the board";
+                return new PlayResult(GameMutationStatus.Success, PlayEffect.BoardShaken);
+            }
+
             case PowerKind.Swap:
             {
                 var target = targetTeamId is null ? null : game.FindTeam(targetTeamId);
@@ -735,7 +765,7 @@ public class GameEngine(IOptions<GamesOptions> options)
     }
 
     /// <summary>Fails every running steal whose clock has run out.</summary>
-    private static bool TimeOutSteals(Game game, DateTimeOffset now)
+    private bool TimeOutSteals(Game game, DateTimeOffset now)
     {
         var changed = false;
 
@@ -759,7 +789,7 @@ public class GameEngine(IOptions<GamesOptions> options)
     /// Gives the team holding a failed steal's target its draw for surviving it. Returns that
     /// team, or null if nobody else holds the borough by now.
     /// </summary>
-    private static string? OfferToDefender(Game game, string stealingTeamId, StealAttempt steal)
+    private string? OfferToDefender(Game game, string stealingTeamId, StealAttempt steal)
     {
         var defender = game.FindTeamHolding(steal.BoroughId);
         if (defender is null || defender.Id == stealingTeamId)
@@ -780,7 +810,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         return defender.Id;
     }
 
-    private static void AddOffer(
+    private void AddOffer(
         Game game,
         string teamId,
         string reason,
@@ -797,6 +827,7 @@ public class GameEngine(IOptions<GamesOptions> options)
         }
 
         var cards = Draw(deck, draws);
+        GuaranteeSteal(powers, deck, cards);
 
         // Every card is either held or waiting in an offer — there is nothing left to give.
         if (cards.Count == 0)
@@ -815,6 +846,73 @@ public class GameEngine(IOptions<GamesOptions> options)
             FromTeamId = fromTeamId,
             WasHot = wasHot,
         });
+    }
+
+    /// <summary>
+    /// The quiet promise that every team gets a Steal: counts this team's draws until its first
+    /// Steal shows up, and if none has by <see cref="GamesOptions.StealDrought"/>, makes one of the
+    /// next <see cref="GamesOptions.StealWithin"/> a Steal — taken from the real deck, with the
+    /// card it replaces going back in, so the deck's numbers never change. If the deck has no
+    /// Steals left, or never had any, nothing is forced.
+    /// </summary>
+    private void GuaranteeSteal(TeamPowers powers, PowerDeck deck, List<PowerCard> cards)
+    {
+        for (var i = 0; i < cards.Count && !powers.HasDrawnSteal; i++)
+        {
+            powers.DrawnWithoutSteal++;
+
+            if (cards[i].Kind is PowerKind.Steal)
+            {
+                powers.HasDrawnSteal = true;
+                return;
+            }
+
+            if (powers.StealDueAt is null && powers.DrawnWithoutSteal >= _options.StealDrought)
+            {
+                powers.StealDueAt = _options.StealDrought + Random.Shared.Next(1, _options.StealWithin + 1);
+            }
+
+            // Nothing until the due draw — or past it, only if the deck had no Steal to give then.
+            if (powers.StealDueAt is not { } due || powers.DrawnWithoutSteal < due)
+            {
+                continue;
+            }
+
+            // A big draw may already hold a Steal further along — possibly the deck's last one.
+            // Bring it forward rather than let it land after the draw it was due on.
+            var later = cards.FindIndex(i + 1, c => c.Kind is PowerKind.Steal);
+            if (later >= 0)
+            {
+                (cards[i], cards[later]) = (cards[later], cards[i]);
+                powers.HasDrawnSteal = true;
+                return;
+            }
+
+            if (TakeSteal(deck) is { } steal)
+            {
+                deck.DrawPile.Insert(Random.Shared.Next(deck.DrawPile.Count + 1), cards[i].PowerId);
+                cards[i] = ToPowerCard(steal);
+                powers.HasDrawnSteal = true;
+                return;
+            }
+        }
+    }
+
+    /// <summary>Pulls a Steal out of the draw pile, or failing that the discard pile.</summary>
+    private static PowerDefinition? TakeSteal(PowerDeck deck)
+    {
+        foreach (var pile in new[] { deck.DrawPile, deck.DiscardPile })
+        {
+            var index = pile.FindIndex(id => deck.Find(id)?.Kind is PowerKind.Steal);
+            if (index >= 0)
+            {
+                var steal = deck.Find(pile[index])!;
+                pile.RemoveAt(index);
+                return steal;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
